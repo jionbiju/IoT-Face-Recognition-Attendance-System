@@ -1,0 +1,482 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Camera Configuration</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        .camera-card {
+            border: 2px solid #e9ecef;
+            border-radius: 15px;
+            padding: 20px;
+            margin: 10px 0;
+            transition: all 0.3s ease;
+        }
+        
+        .camera-card:hover {
+            border-color: #007bff;
+            box-shadow: 0 4px 12px rgba(0,123,255,0.15);
+        }
+        
+        .camera-card.active {
+            border-color: #28a745;
+            background-color: #f8fff9;
+        }
+        
+        .camera-preview {
+            width: 100%;
+            max-width: 300px;
+            height: 200px;
+            background: #f8f9fa;
+            border: 2px dashed #dee2e6;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 10px 0;
+        }
+        
+        .status-indicator {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            display: inline-block;
+            margin-right: 8px;
+        }
+        
+        .status-online { background-color: #28a745; }
+        .status-offline { background-color: #dc3545; }
+        .status-testing { background-color: #ffc107; animation: pulse 1s infinite; }
+        
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.5; }
+            100% { opacity: 1; }
+        }
+        
+        .droidcam-setup {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border-radius: 15px;
+            padding: 20px;
+            margin: 20px 0;
+        }
+        
+        .step-card {
+            background: white;
+            color: #333;
+            border-radius: 10px;
+            padding: 15px;
+            margin: 10px 0;
+        }
+    </style>
+</head>
+<body class="bg-light">
+    <nav class="navbar navbar-expand-lg navbar-dark" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);">
+        <div class="container">
+            <a class="navbar-brand" href="/">
+                <i class="fas fa-video me-2"></i>Camera Configuration
+            </a>
+            <div class="navbar-nav ms-auto">
+                <a class="nav-link" href="/"><i class="fas fa-home me-1"></i>Home</a>
+                <a class="nav-link" href="/mark_attendance"><i class="fas fa-camera me-1"></i>Mark Attendance</a>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container mt-4">
+        <!-- DroidCam Setup Guide -->
+        <div class="droidcam-setup">
+            <h3><i class="fas fa-mobile-alt me-2"></i>DroidCam Setup Guide</h3>
+            <p>Follow these steps to use your phone camera as external hardware:</p>
+            
+            <div class="row">
+                <div class="col-md-4">
+                    <div class="step-card">
+                        <h5><i class="fas fa-download text-primary me-2"></i>Step 1: Install</h5>
+                        <p>Download DroidCam on your phone and computer</p>
+                        <small>✓ Already done if you can see this page</small>
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="step-card">
+                        <h5><i class="fas fa-wifi text-success me-2"></i>Step 2: Connect</h5>
+                        <p>Connect phone and computer via WiFi or USB</p>
+                        <small>Make sure both devices are on same network</small>
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="step-card">
+                        <h5><i class="fas fa-cog text-warning me-2"></i>Step 3: Configure</h5>
+                        <p>Select your phone camera below</p>
+                        <small>System will auto-detect DroidCam</small>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Current Camera Status -->
+        <div class="row">
+            <div class="col-12">
+                <div class="card">
+                    <div class="card-header">
+                        <h5><i class="fas fa-info-circle me-2"></i>Current Camera Status</h5>
+                    </div>
+                    <div class="card-body">
+                        <div id="currentCameraInfo">
+                            <div class="text-center">
+                                <i class="fas fa-spinner fa-spin"></i> Loading camera information...
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Available Cameras -->
+        <div class="row mt-4">
+            <div class="col-12">
+                <div class="card">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <h5><i class="fas fa-camera me-2"></i>Available Cameras</h5>
+                        <button id="refreshCameras" class="btn btn-outline-primary btn-sm">
+                            <i class="fas fa-sync-alt me-1"></i>Refresh
+                        </button>
+                    </div>
+                    <div class="card-body">
+                        <div id="camerasList">
+                            <div class="text-center">
+                                <i class="fas fa-spinner fa-spin"></i> Scanning for cameras...
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Instructions -->
+        <div class="row mt-4">
+            <div class="col-12">
+                <div class="alert alert-info">
+                    <h6><i class="fas fa-lightbulb me-2"></i>Tips:</h6>
+                    <ul class="mb-0">
+                        <li><strong>DroidCam not showing?</strong> Make sure DroidCam app is running on both phone and computer</li>
+                        <li><strong>Poor quality?</strong> Check your WiFi connection and DroidCam video quality settings</li>
+                        <li><strong>Camera not working?</strong> Try restarting DroidCam on both devices</li>
+                        <li><strong>Multiple cameras?</strong> Higher resolution cameras are usually DroidCam</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        let currentCameraIndex = 0;
+
+        // Initialize page
+        document.addEventListener('DOMContentLoaded', function() {
+            loadCurrentCamera();
+            loadAvailableCameras();
+            
+            document.getElementById('refreshCameras').addEventListener('click', loadAvailableCameras);
+        });
+
+        async function loadCurrentCamera() {
+            try {
+                const response = await fetch('/api/camera/current');
+                const data = await response.json();
+                
+                const infoDiv = document.getElementById('currentCameraInfo');
+                
+                if (data.error) {
+                    infoDiv.innerHTML = `
+                        <div class="row align-items-center">
+                            <div class="col-md-8">
+                                <h6><span class="status-indicator status-offline"></span>Camera Error</h6>
+                                <p class="mb-0 text-danger">${data.error}</p>
+                            </div>
+                            <div class="col-md-4 text-end">
+                                <span class="badge bg-danger">Error</span>
+                            </div>
+                        </div>
+                    `;
+                } else if (data.status === 'active') {
+                    currentCameraIndex = data.camera_index;
+                    infoDiv.innerHTML = `
+                        <div class="row align-items-center">
+                            <div class="col-md-8">
+                                <h6><span class="status-indicator status-online"></span>Camera ${data.camera_index} Active</h6>
+                                <p class="mb-0">Resolution: ${data.resolution} | FPS: ${data.fps}</p>
+                            </div>
+                            <div class="col-md-4 text-end">
+                                <span class="badge bg-success">Connected</span>
+                            </div>
+                        </div>
+                    `;
+                } else {
+                    infoDiv.innerHTML = `
+                        <div class="row align-items-center">
+                            <div class="col-md-8">
+                                <h6><span class="status-indicator status-offline"></span>Camera ${data.camera_index || 'undefined'} Error</h6>
+                                <p class="mb-0 text-danger">${data.message || 'Unknown error'}</p>
+                            </div>
+                            <div class="col-md-4 text-end">
+                                <span class="badge bg-danger">Disconnected</span>
+                            </div>
+                        </div>
+                    `;
+                }
+            } catch (error) {
+                console.error('Error loading camera info:', error);
+                document.getElementById('currentCameraInfo').innerHTML = `
+                    <div class="text-danger">
+                        <i class="fas fa-exclamation-triangle me-2"></i>Error loading camera information: ${error.message}
+                    </div>
+                `;
+            }
+        }
+
+        async function loadAvailableCameras() {
+            const listDiv = document.getElementById('camerasList');
+            listDiv.innerHTML = '<div class="text-center"><i class="fas fa-spinner fa-spin"></i> Scanning for cameras...</div>';
+            
+            try {
+                const response = await fetch('/api/camera/list');
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                const data = await response.json();
+                
+                if (data.error) {
+                    throw new Error(data.error);
+                }
+                
+                if (data.cameras && data.cameras.length > 0) {
+                    listDiv.innerHTML = '';
+                    
+                    // Add DroidCam detection button
+                    const droidcamButton = document.createElement('div');
+                    droidcamButton.className = 'mb-3';
+                    droidcamButton.innerHTML = `
+                        <button class="btn btn-primary" onclick="detectDroidCam()">
+                            <i class="fas fa-search me-2"></i>🔍 Detect DroidCam Specifically
+                        </button>
+                        <small class="text-muted ms-2">Click if DroidCam is not showing up</small>
+                    `;
+                    listDiv.appendChild(droidcamButton);
+                    
+                    data.cameras.forEach(camera => {
+                        const isActive = camera.index === currentCameraIndex;
+                        let cardClass = 'camera-card';
+                        
+                        if (isActive) {
+                            cardClass += ' active';
+                        } else if (camera.is_droidcam) {
+                            cardClass += ' border-primary';
+                        }
+                        
+                        const cameraCard = document.createElement('div');
+                        cameraCard.className = cardClass;
+                        cameraCard.innerHTML = `
+                            <div class="row align-items-center">
+                                <div class="col-md-2 text-center">
+                                    <i class="fas fa-${camera.is_droidcam ? 'mobile-alt' : 'video'} fa-2x ${isActive ? 'text-success' : (camera.is_droidcam ? 'text-primary' : 'text-secondary')}"></i>
+                                    <div class="mt-2">
+                                        <strong>Camera ${camera.index}</strong>
+                                    </div>
+                                </div>
+                                <div class="col-md-6">
+                                    <h6>${camera.name}</h6>
+                                    <p class="mb-1">Resolution: ${camera.resolution}</p>
+                                    <p class="mb-0">FPS: ${camera.fps}</p>
+                                    ${camera.is_droidcam ? 
+                                        '<span class="badge bg-primary">📱 DroidCam Detected!</span>' : 
+                                        camera.index === 0 ? '<span class="badge bg-secondary">💻 Built-in</span>' :
+                                        '<span class="badge bg-info">📷 External</span>'}
+                                </div>
+                                <div class="col-md-4 text-end">
+                                    ${isActive ? 
+                                        '<span class="badge bg-success mb-2">Currently Active</span><br>' : 
+                                        `<button class="btn btn-${camera.is_droidcam ? 'primary' : 'outline-primary'} btn-sm mb-2" onclick="setActiveCamera(${camera.index})">
+                                            <i class="fas fa-check me-1"></i>${camera.is_droidcam ? 'Use DroidCam' : 'Use This Camera'}
+                                        </button><br>`
+                                    }
+                                    <button class="btn btn-outline-secondary btn-sm" onclick="testCamera(${camera.index})">
+                                        <i class="fas fa-play me-1"></i>Test
+                                    </button>
+                                </div>
+                            </div>
+                        `;
+                        
+                        listDiv.appendChild(cameraCard);
+                    });
+                    
+                    // Show tip if no DroidCam detected
+                    const droidcamDetected = data.cameras.some(cam => cam.is_droidcam);
+                    if (!droidcamDetected) {
+                        const tipDiv = document.createElement('div');
+                        tipDiv.className = 'alert alert-warning mt-3';
+                        tipDiv.innerHTML = `
+                            <h6><i class="fas fa-exclamation-triangle me-2"></i>DroidCam Not Auto-Detected</h6>
+                            <p class="mb-2">Your DroidCam might be one of these cameras:</p>
+                            <ul class="mb-2">
+                                <li><strong>Camera 2 or 3</strong> are common DroidCam indices</li>
+                                <li>Try testing each camera to see which shows your phone</li>
+                                <li>Click "🔍 Detect DroidCam Specifically" above</li>
+                            </ul>
+                            <p class="mb-0"><strong>We know Camera 2 is your DroidCam (1920x1080)!</strong></p>
+                        `;
+                        listDiv.appendChild(tipDiv);
+                    }
+                } else {
+                    listDiv.innerHTML = `
+                        <div class="text-center text-muted">
+                            <i class="fas fa-camera-slash fa-3x mb-3"></i>
+                            <h5>No cameras detected</h5>
+                            <p>Make sure DroidCam is running and connected</p>
+                            <button class="btn btn-primary" onclick="detectDroidCam()">
+                                <i class="fas fa-search me-2"></i>Try DroidCam Detection
+                            </button>
+                            <div class="mt-3">
+                                <p><strong>Manual Selection:</strong></p>
+                                <button class="btn btn-outline-primary me-2" onclick="setActiveCamera(2)">Use Camera 2 (DroidCam)</button>
+                                <button class="btn btn-outline-secondary" onclick="setActiveCamera(0)">Use Camera 0 (Laptop)</button>
+                            </div>
+                        </div>
+                    `;
+                }
+            } catch (error) {
+                console.error('Camera list error:', error);
+                listDiv.innerHTML = `
+                    <div class="text-danger text-center">
+                        <i class="fas fa-exclamation-triangle me-2"></i>Error scanning cameras: ${error.message}
+                        <div class="mt-3">
+                            <p><strong>Manual Selection Available:</strong></p>
+                            <button class="btn btn-primary me-2" onclick="setActiveCamera(2)">
+                                <i class="fas fa-mobile-alt me-1"></i>Use Camera 2 (DroidCam)
+                            </button>
+                            <button class="btn btn-outline-secondary" onclick="setActiveCamera(0)">
+                                <i class="fas fa-laptop me-1"></i>Use Camera 0 (Laptop)
+                            </button>
+                        </div>
+                    </div>
+                `;
+            }
+        }
+
+        async function detectDroidCam() {
+            showAlert('info', '🔍 Scanning specifically for DroidCam...');
+            
+            try {
+                const response = await fetch('/api/camera/test_droidcam', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+                
+                const data = await response.json();
+                
+                if (data.found && data.droidcam_cameras.length > 0) {
+                    let message = `📱 Found ${data.droidcam_cameras.length} DroidCam camera(s):\n`;
+                    data.droidcam_cameras.forEach(cam => {
+                        message += `Camera ${cam.index}: ${cam.resolution}\n`;
+                    });
+                    
+                    showAlert('success', message);
+                    
+                    // Refresh the camera list
+                    loadAvailableCameras();
+                } else {
+                    showAlert('warning', '📱 No DroidCam detected. Make sure DroidCam is running on both phone and computer.');
+                }
+            } catch (error) {
+                showAlert('danger', 'Error detecting DroidCam: ' + error.message);
+            }
+        }
+
+        async function setActiveCamera(cameraIndex) {
+            try {
+                const response = await fetch('/api/camera/set_active', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ camera_index: cameraIndex })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    // Show success message
+                    showAlert('success', `Camera ${cameraIndex} set as active!`);
+                    
+                    // Reload camera information
+                    currentCameraIndex = cameraIndex;
+                    loadCurrentCamera();
+                    loadAvailableCameras();
+                } else {
+                    showAlert('danger', 'Failed to set camera: ' + data.error);
+                }
+            } catch (error) {
+                showAlert('danger', 'Error setting camera: ' + error.message);
+            }
+        }
+
+        async function testCamera(cameraIndex) {
+            // Show testing status
+            showAlert('warning', `Testing camera ${cameraIndex}...`);
+            
+            try {
+                const response = await fetch('/api/camera/test', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ camera_index: cameraIndex })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    showAlert('success', `Camera ${cameraIndex} test successful! ${data.resolution} @ ${data.fps} FPS`);
+                } else {
+                    showAlert('danger', `Camera ${cameraIndex} test failed: ${data.message}`);
+                }
+            } catch (error) {
+                showAlert('danger', 'Error testing camera: ' + error.message);
+            }
+        }
+
+        function showAlert(type, message) {
+            // Remove existing alerts
+            const existingAlerts = document.querySelectorAll('.alert-dismissible');
+            existingAlerts.forEach(alert => alert.remove());
+            
+            // Create new alert
+            const alertDiv = document.createElement('div');
+            alertDiv.className = `alert alert-${type} alert-dismissible fade show`;
+            alertDiv.innerHTML = `
+                ${message}
+                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+            `;
+            
+            // Insert at top of container
+            const container = document.querySelector('.container');
+            container.insertBefore(alertDiv, container.firstChild.nextSibling);
+            
+            // Auto-dismiss after 5 seconds
+            setTimeout(() => {
+                if (alertDiv.parentNode) {
+                    alertDiv.remove();
+                }
+            }, 5000);
+        }
+    </script>
+</body>
+</html>
