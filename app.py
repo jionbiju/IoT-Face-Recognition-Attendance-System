@@ -233,7 +233,20 @@ def add_student():
     now = datetime.datetime.utcnow().isoformat()
     c.execute("INSERT INTO students (id, name, roll, class, section, reg_no, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
               (next_id, name, roll, cls, sec, reg_no, now))
+    
+    # AUTO-ENROLL: Automatically enroll new student in all subjects
+    c.execute("SELECT id FROM subjects")
+    subjects = c.fetchall()
+    
+    for (subject_id,) in subjects:
+        c.execute("INSERT INTO student_subjects (student_id, subject_id, enrolled_at) VALUES (?, ?, ?)",
+                  (next_id, subject_id, now))
+    
     conn.commit()
+    
+    # Log enrollment for debugging
+    app.logger.info(f"Student {next_id} ({name}) enrolled in {len(subjects)} subjects")
+    
     conn.close()
     
     # create dataset folder for this student
@@ -1354,8 +1367,8 @@ def delete_student(sid):
         except Exception as e:
             app.logger.warning(f"Could not remove face encodings for student {sid}: {e}")
         
-        # Auto-reorganize IDs after deletion
-        reorganize_student_ids()
+        # REMOVED: Auto-reorganize IDs after deletion - this was causing database corruption
+        # reorganize_student_ids()  # DANGEROUS - DO NOT USE
         
         # CRITICAL: Retrain face recognition model after deletion
         try:
@@ -1384,120 +1397,14 @@ def delete_student(sid):
         app.logger.error(f"Error deleting student {sid}: {e}")
         return jsonify({"deleted": False, "error": str(e)}), 500
 
-def reorganize_student_ids():
-    """Reorganize student IDs to be sequential (1, 2, 3, ...) without gaps"""
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    
-    # Get all students ordered by current ID
-    c.execute("SELECT id, name, roll, class, section, reg_no, created_at FROM students ORDER BY id")
-    students = c.fetchall()
-    
-    if not students:
-        conn.close()
-        return
-    
-    # Create mapping of old ID to new ID
-    id_mapping = {}
-    
-    # Start transaction
-    c.execute("BEGIN TRANSACTION")
-    
-    try:
-        # Create temporary table
-        c.execute("""CREATE TEMPORARY TABLE students_temp (
-                        id INTEGER PRIMARY KEY,
-                        name TEXT NOT NULL,
-                        roll TEXT,
-                        class TEXT,
-                        section TEXT,
-                        reg_no TEXT,
-                        created_at TEXT
-                    )""")
-        
-        c.execute("""CREATE TEMPORARY TABLE attendance_temp (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        student_id INTEGER,
-                        name TEXT,
-                        timestamp TEXT
-                    )""")
-        
-        # Insert students with new sequential IDs
-        for new_id, (old_id, name, roll, cls, section, reg_no, created_at) in enumerate(students, 1):
-            id_mapping[old_id] = new_id
-            c.execute("INSERT INTO students_temp VALUES (?, ?, ?, ?, ?, ?, ?)",
-                     (new_id, name, roll, cls, section, reg_no, created_at))
-        
-        # Update attendance records with new student IDs
-        c.execute("SELECT id, student_id, name, timestamp FROM attendance")
-        attendance_records = c.fetchall()
-        
-        for att_id, old_student_id, name, timestamp in attendance_records:
-            if old_student_id in id_mapping:
-                new_student_id = id_mapping[old_student_id]
-                c.execute("INSERT INTO attendance_temp (student_id, name, timestamp) VALUES (?, ?, ?)",
-                         (new_student_id, name, timestamp))
-        
-        # Replace original tables
-        c.execute("DROP TABLE students")
-        c.execute("DROP TABLE attendance")
-        c.execute("ALTER TABLE students_temp RENAME TO students")
-        c.execute("ALTER TABLE attendance_temp RENAME TO attendance")
-        
-        # Reorganize dataset folders
-        reorganize_dataset_folders(id_mapping)
-        
-        # Update face recognition database
-        update_face_database_ids(id_mapping)
-        
-        c.execute("COMMIT")
-        print(f"Reorganized {len(students)} student IDs successfully")
-        
-    except Exception as e:
-        c.execute("ROLLBACK")
-        print(f"Error reorganizing IDs: {e}")
-    
-    conn.close()
-
-def reorganize_dataset_folders(id_mapping):
-    """Reorganize dataset folders to match new IDs"""
-    if not os.path.exists(DATASET_DIR):
-        return
-    
-    # Create temporary directory
-    temp_dir = os.path.join(DATASET_DIR, "temp_reorganize")
-    os.makedirs(temp_dir, exist_ok=True)
-    
-    try:
-        # Move folders to temporary location with new names
-        for old_id, new_id in id_mapping.items():
-            old_folder = os.path.join(DATASET_DIR, str(old_id))
-            temp_folder = os.path.join(temp_dir, str(new_id))
-            
-            if os.path.exists(old_folder):
-                import shutil
-                shutil.move(old_folder, temp_folder)
-        
-        # Move folders back to dataset directory
-        for new_id in id_mapping.values():
-            temp_folder = os.path.join(temp_dir, str(new_id))
-            new_folder = os.path.join(DATASET_DIR, str(new_id))
-            
-            if os.path.exists(temp_folder):
-                import shutil
-                shutil.move(temp_folder, new_folder)
-        
-        # Remove temporary directory
-        import shutil
-        shutil.rmtree(temp_dir, ignore_errors=True)
-        
-    except Exception as e:
-        print(f"Error reorganizing dataset folders: {e}")
-
-def update_face_database_ids(id_mapping):
-    """Update face recognition database with new student IDs"""
-    try:
-        from face_model import load_model_if_exists, save_face_database
+# DANGEROUS FUNCTIONS REMOVED - These caused database corruption
+# - reorganize_student_ids() - Deleted all students when deleting one
+# - reorganize_dataset_folders() - Corrupted dataset folders  
+# - update_face_database_ids() - Broke face recognition
+# - reorganize_ids_route() - Manual trigger for dangerous function
+# 
+# These functions have been permanently removed for safety.
+# Student IDs should remain stable and not be reorganized.
         
         face_database = load_model_if_exists()
         if not face_database:
@@ -1519,14 +1426,10 @@ def update_face_database_ids(id_mapping):
         print(f"Error updating face database: {e}")
 
 # Add route to manually trigger reorganization
-@app.route("/reorganize_ids", methods=["POST"])
-def reorganize_ids_route():
-    """Manual route to reorganize student IDs"""
-    try:
-        reorganize_student_ids()
-        return jsonify({"success": True, "message": "Student IDs reorganized successfully"})
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
+# DANGEROUS ROUTE REMOVED - This was causing database corruption
+# @app.route("/reorganize_ids", methods=["POST"])
+# def reorganize_ids_route():
+#     """Manual route to reorganize student IDs - REMOVED FOR SAFETY"""
 
 # Add route to clean up duplicate attendance records
 @app.route("/cleanup_duplicates", methods=["POST"])

@@ -215,13 +215,38 @@ quick_camera_test.py
 find_camera.py
 test_face_recognition.py
 test_recognition.py
+test_delete_fix.py
+test_delete_thoroughly.py
+test_web_delete.py
+test_auto_enrollment.py
+simple_delete_test.py
+final_delete_verification.py
+add_test_students.py
+check_enrollments_detail.py
+fix_jion_enrollment.py
+
+# Utility and diagnostic scripts (keep these commented if you want to include them)
+diagnose_system.py
+emergency_fix.py
+fix_enrollments.py
+who_am_i_test.py
 
 # Project documentation and summary files
 DROIDCAM_INTEGRATION_SUMMARY.md
 TRAINING_OPTIMIZATION.md
+DELETE_BUG_FIXED.md
+DELETE_FUNCTION_VERIFIED.md
+ENROLLMENT_ISSUE_FIXED.md
+AUTO_ENROLLMENT_IMPLEMENTED.md
+GITHUB_PUSH_SUMMARY.md
 *.md.bak
+
+# Database backups
+attendance_backup_*.db
+*.db.backup
 
 # Run scripts
 run_app.bat
+retrain_now.bat
 *.bat
 *.sh

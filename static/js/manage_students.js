@@ -177,6 +177,11 @@ document.getElementById('reorganizeBtn').addEventListener('click', async () => {
     return;
   }
   
+  // DANGEROUS FUNCTION REMOVED - This was causing database corruption
+  showAlert('ID reorganization has been disabled for safety. Student IDs remain stable.', 'warning');
+  return;
+  
+  /*
   const reorganizeBtn = document.getElementById('reorganizeBtn');
   const originalText = reorganizeBtn.textContent;
   reorganizeBtn.textContent = 'Reorganizing...';
@@ -205,6 +210,7 @@ document.getElementById('reorganizeBtn').addEventListener('click', async () => {
     reorganizeBtn.textContent = originalText;
     reorganizeBtn.disabled = false;
   }
+  */
 });
 
 function showAlert(message, type) {
