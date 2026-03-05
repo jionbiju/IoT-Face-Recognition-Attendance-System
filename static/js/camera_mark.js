@@ -2,6 +2,9 @@
 const startMarkBtn = document.getElementById("startMarkBtn");
 const stopMarkBtn = document.getElementById("stopMarkBtn");
 const cameraSelect = document.getElementById("cameraSelect");
+const subjectSelect = document.getElementById("subjectSelect");
+const periodSelect = document.getElementById("periodSelect");
+const selectionStatus = document.getElementById("selectionStatus");
 const markVideo = document.getElementById("markVideo");
 const markStatus = document.getElementById("markStatus");
 const recognizedList = document.getElementById("recognizedList");
@@ -13,8 +16,83 @@ let lastScanTime = 0;
 let scanCounter = 0;
 let activeCamera = 0; // Default camera
 let availableDevices = [];
+let selectedSubject = null; // {id, code, name}
+let selectedPeriod = null; // period number
 
-// Load camera configuration and populate dropdown
+// Load subjects
+async function loadSubjects() {
+  try {
+    const subjectsResponse = await fetch('/subjects');
+    const subjectsData = await subjectsResponse.json();
+    
+    if (subjectsData.subjects && subjectsData.subjects.length > 0) {
+      subjectsData.subjects.forEach(subject => {
+        const option = document.createElement('option');
+        option.value = subject.id;
+        option.textContent = `${subject.code} - ${subject.name}`;
+        option.dataset.code = subject.code;
+        option.dataset.name = subject.name;
+        subjectSelect.appendChild(option);
+      });
+    }
+  } catch (error) {
+    console.error('Error loading subjects:', error);
+  }
+}
+
+// Update selection status
+function updateSelectionStatus() {
+  const hasSubject = subjectSelect.value !== '';
+  const hasPeriod = periodSelect.value !== '';
+  
+  if (hasSubject && hasPeriod) {
+    const subjectOption = subjectSelect.options[subjectSelect.selectedIndex];
+    const periodOption = periodSelect.options[periodSelect.selectedIndex];
+    
+    selectionStatus.className = 'alert alert-success mb-0 py-2';
+    selectionStatus.innerHTML = `
+      <i class="fas fa-check-circle me-2"></i>
+      <strong>Ready:</strong> ${subjectOption.textContent} - ${periodOption.textContent}
+    `;
+    startMarkBtn.disabled = false;
+  } else {
+    selectionStatus.className = 'alert alert-warning mb-0 py-2';
+    selectionStatus.innerHTML = `
+      <i class="fas fa-exclamation-triangle me-2"></i>
+      Please select both subject and period to continue
+    `;
+    startMarkBtn.disabled = true;
+  }
+}
+
+// Handle subject selection change
+subjectSelect.addEventListener('change', function() {
+  if (this.value) {
+    const option = this.options[this.selectedIndex];
+    selectedSubject = {
+      id: parseInt(this.value),
+      code: option.dataset.code,
+      name: option.dataset.name
+    };
+    console.log('Subject selected:', selectedSubject);
+  } else {
+    selectedSubject = null;
+  }
+  updateSelectionStatus();
+});
+
+// Handle period selection change
+periodSelect.addEventListener('change', function() {
+  if (this.value) {
+    selectedPeriod = parseInt(this.value);
+    console.log('Period selected:', selectedPeriod);
+  } else {
+    selectedPeriod = null;
+  }
+  updateSelectionStatus();
+});
+
+
 async function loadCameraConfig() {
   try {
     // Get browser camera devices
@@ -111,8 +189,12 @@ cameraSelect.addEventListener('change', function() {
   }
 });
 
-// Load camera config on page load
-document.addEventListener('DOMContentLoaded', loadCameraConfig);
+// Load camera config and subjects on page load
+document.addEventListener('DOMContentLoaded', function() {
+  loadCameraConfig();
+  loadSubjects();
+  updateSelectionStatus(); // Initial status check
+});
 
 async function startCamera() {
   startMarkBtn.disabled = true;
@@ -228,6 +310,16 @@ async function captureAndRecognize() {
   const blob = await new Promise(r => canvas.toBlob(r, "image/jpeg", 0.85));
   const fd = new FormData();
   fd.append("image", blob, "snap.jpg");
+  
+  // Add selected subject and period (both required)
+  if (selectedSubject && selectedPeriod) {
+    fd.append("subject_id", selectedSubject.id);
+    fd.append("period", selectedPeriod);
+  } else {
+    // Should not happen as button is disabled, but handle gracefully
+    markStatus.innerHTML = `<span class="text-warning">⚠️ Please select subject and period</span>`;
+    return;
+  }
 
   try {
     const res = await fetch("/recognize_face", { method: "POST", body: fd });
@@ -236,6 +328,19 @@ async function captureAndRecognize() {
     if (j.recognized) {
       // Handle successful new attendance
       let statusText = `✅ Recognized: ${j.name} (${Math.round(j.confidence * 100)}%)`;
+      
+      // Add subject info if available
+      if (j.subject) {
+        statusText += ` | 📚 ${j.subject.code}`;
+        if (j.subject.period) {
+          statusText += ` (Period ${j.subject.period})`;
+        }
+      }
+      
+      // Add liveness score if available
+      if (j.liveness_score) {
+        statusText += ` | 🛡️ Live: ${Math.round(j.liveness_score * 100)}%`;
+      }
       
       // Add advanced features info if available
       if (j.advanced_features) {
@@ -268,25 +373,38 @@ async function captureAndRecognize() {
         recognizedList.prepend(li);
       }
     } else {
-      // Handle No Face, Unknown Face, or Already Marked (hidden)
-      // Vary the message to make it look more natural and professional
-      const messages = [
-        "Scanning...",
-        "Analyzing face...",
-        "Processing image...",
-        "Detecting features...",
-        "Matching patterns...",
-        "Verifying identity..."
-      ];
-      const message = messages[scanCounter % messages.length];
-      
-      if (j.error && j.error.includes("Unknown person")) {
+      // Handle errors including liveness check failures
+      if (j.error && j.error.includes("Liveness check failed")) {
+        // Show security warning for spoofing attempt
+        markStatus.innerHTML = `<span class="text-danger"><i class="fas fa-shield-alt me-2"></i>⚠️ Security Alert: Photo/Video detected! Please use live camera.</span>`;
+        
+        // Show detailed liveness info in console for debugging
+        if (j.liveness_details) {
+          console.log("Liveness Detection Details:", j.liveness_details);
+        }
+      } else if (j.error && j.error.includes("Unknown person")) {
+        const messages = [
+          "Scanning...",
+          "Analyzing face...",
+          "Processing image...",
+          "Detecting features...",
+          "Matching patterns...",
+          "Verifying identity..."
+        ];
+        const message = messages[scanCounter % messages.length];
         markStatus.innerHTML = `<span class="text-muted"><i class="spinner-border spinner-border-sm me-2"></i>${message} No match found</span>`;
-      } else if (j.error && j.error.includes("Liveness check failed")) {
-        markStatus.innerHTML = `<span class="text-warning"><i class="fas fa-shield-alt me-2"></i>Security check failed</span>`;
       } else if (j.error && j.error.includes("Suspicious activity")) {
         markStatus.innerHTML = `<span class="text-danger"><i class="fas fa-exclamation-triangle me-2"></i>Security alert</span>`;
       } else {
+        const messages = [
+          "Scanning...",
+          "Analyzing face...",
+          "Processing image...",
+          "Detecting features...",
+          "Matching patterns...",
+          "Verifying identity..."
+        ];
+        const message = messages[scanCounter % messages.length];
         markStatus.innerHTML = `<span class="text-muted"><i class="spinner-border spinner-border-sm me-2"></i>${message}</span>`;
       }
     }

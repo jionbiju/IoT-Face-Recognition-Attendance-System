@@ -6,22 +6,52 @@ let studentToDelete = null;
 document.addEventListener('DOMContentLoaded', loadStudents);
 
 async function loadStudents() {
+  const loadingMsg = document.getElementById('loadingMsg');
+  const studentsContainer = document.getElementById('studentsContainer');
+  const noStudents = document.getElementById('noStudents');
+  
   try {
-    const response = await fetch('/students');
-    const data = await response.json();
-    students = data.students;
+    loadingMsg.style.display = 'block';
+    studentsContainer.style.display = 'none';
+    noStudents.style.display = 'none';
     
-    document.getElementById('loadingMsg').style.display = 'none';
+    const response = await fetch('/students');
+    
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+    
+    const data = await response.json();
+    
+    if (data.error) {
+      throw new Error(data.error);
+    }
+    
+    students = data.students || [];
+    
+    loadingMsg.style.display = 'none';
     
     if (students.length === 0) {
-      document.getElementById('noStudents').style.display = 'block';
+      noStudents.style.display = 'block';
     } else {
-      document.getElementById('studentsContainer').style.display = 'block';
+      studentsContainer.style.display = 'block';
       renderStudentsTable();
     }
+    
+    console.log(`Loaded ${students.length} students successfully`);
+    
   } catch (error) {
     console.error('Error loading students:', error);
-    document.getElementById('loadingMsg').innerHTML = '<p class="text-danger">Error loading students</p>';
+    loadingMsg.innerHTML = `
+      <div class="alert alert-danger">
+        <i class="bi bi-exclamation-triangle-fill me-2"></i>
+        <strong>Error loading students:</strong> ${error.message}
+        <br><br>
+        <button class="btn btn-sm btn-primary" onclick="location.reload()">
+          <i class="bi bi-arrow-clockwise me-1"></i>Retry
+        </button>
+      </div>
+    `;
   }
 }
 
@@ -29,20 +59,37 @@ function renderStudentsTable() {
   const tbody = document.getElementById('studentsTable');
   tbody.innerHTML = '';
   
+  if (!students || students.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="8" class="text-center text-muted">No students found</td></tr>';
+    return;
+  }
+  
   students.forEach(student => {
     const row = document.createElement('tr');
-    const createdDate = new Date(student.created_at).toLocaleDateString();
+    
+    // Safely handle date
+    let createdDate = '-';
+    try {
+      if (student.created_at) {
+        createdDate = new Date(student.created_at).toLocaleDateString();
+      }
+    } catch (e) {
+      console.warn('Invalid date for student:', student.id);
+    }
+    
+    // Escape student name for onclick
+    const escapedName = (student.name || 'Unknown').replace(/'/g, "\\'");
     
     row.innerHTML = `
-      <td>${student.id}</td>
-      <td><strong>${student.name}</strong></td>
+      <td>${student.id || '-'}</td>
+      <td><strong>${student.name || 'Unknown'}</strong></td>
       <td>${student.roll || '-'}</td>
       <td>${student.class || '-'}</td>
       <td>${student.section || '-'}</td>
       <td>${student.reg_no || '-'}</td>
       <td>${createdDate}</td>
       <td>
-        <button class="btn btn-danger btn-sm" onclick="showDeleteModal(${student.id}, '${student.name}')">
+        <button class="btn btn-danger btn-sm" onclick="showDeleteModal(${student.id}, '${escapedName}')">
           <i class="bi bi-trash"></i> Delete
         </button>
       </td>
@@ -50,6 +97,8 @@ function renderStudentsTable() {
     
     tbody.appendChild(row);
   });
+  
+  console.log(`Rendered ${students.length} students in table`);
 }
 
 function showDeleteModal(studentId, studentName) {
@@ -64,8 +113,8 @@ document.getElementById('confirmDeleteBtn').addEventListener('click', async () =
   if (!studentToDelete) return;
   
   const deleteBtn = document.getElementById('confirmDeleteBtn');
-  const originalText = deleteBtn.textContent;
-  deleteBtn.textContent = 'Deleting...';
+  const originalText = deleteBtn.innerHTML;
+  deleteBtn.innerHTML = '<i class="bi bi-hourglass-split me-1"></i>Deleting...';
   deleteBtn.disabled = true;
   
   try {
@@ -91,21 +140,32 @@ document.getElementById('confirmDeleteBtn').addEventListener('click', async () =
       const modal = bootstrap.Modal.getInstance(document.getElementById('deleteModal'));
       modal.hide();
       
-      // Show success message and reload to show reorganized IDs
-      showAlert('Student deleted and IDs reorganized successfully!', 'success');
+      // Show detailed success message
+      const details = [
+        `Student: ${result.student_name}`,
+        `Images deleted: ${result.images_deleted}`,
+        `Attendance records deleted: ${result.attendance_records_deleted}`,
+        `Face encodings removed from model`
+      ];
       
-      // Reload students to show new IDs
+      showAlert(
+        `<strong>Student Deleted Successfully!</strong><br>
+        <small>${details.join(' | ')}</small>`, 
+        'success'
+      );
+      
+      // Reload students to show reorganized IDs
       setTimeout(() => {
         loadStudents();
-      }, 1000);
+      }, 2000);
     } else {
-      showAlert('Error deleting student', 'danger');
+      showAlert(`Error: ${result.error || 'Failed to delete student'}`, 'danger');
     }
   } catch (error) {
     console.error('Error deleting student:', error);
-    showAlert('Error deleting student', 'danger');
+    showAlert('Error deleting student. Please try again.', 'danger');
   } finally {
-    deleteBtn.textContent = originalText;
+    deleteBtn.innerHTML = originalText;
     deleteBtn.disabled = false;
     studentToDelete = null;
   }

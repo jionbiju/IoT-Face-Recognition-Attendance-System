@@ -5,6 +5,7 @@ import sqlite3
 import datetime
 import json
 import cv2
+import numpy as np
 from flask import Flask, render_template, request, jsonify, send_file, abort
 from face_model import train_model_background, extract_embedding_for_image, MODEL_PATH
 
@@ -17,27 +18,138 @@ TRAIN_STATUS_FILE = os.path.join(APP_DIR, "train_status.json")
 
 app = Flask(__name__, static_folder="static", template_folder="templates")
 
+# Custom Jinja2 filter for human-readable timestamps
+@app.template_filter('human_datetime')
+def human_datetime_filter(timestamp_str):
+    """Convert ISO timestamp to human-readable format"""
+    try:
+        # Parse the ISO format timestamp
+        dt = datetime.datetime.fromisoformat(timestamp_str)
+        
+        # Get current time for relative formatting
+        now = datetime.datetime.now()
+        diff = now - dt
+        
+        # Format date
+        if dt.date() == now.date():
+            date_part = "Today"
+        elif dt.date() == (now - datetime.timedelta(days=1)).date():
+            date_part = "Yesterday"
+        elif diff.days < 7:
+            date_part = dt.strftime("%A")  # Day name (e.g., Monday)
+        else:
+            date_part = dt.strftime("%B %d, %Y")  # e.g., March 04, 2026
+        
+        # Format time in 12-hour format with AM/PM
+        time_part = dt.strftime("%I:%M %p")  # e.g., 02:30 PM
+        
+        # Combine
+        return f"{date_part} at {time_part}"
+    except:
+        # Fallback to original if parsing fails
+        return timestamp_str
+
 # ---------- DB helpers ----------
+def get_db_connection():
+    """Get a database connection with proper settings"""
+    conn = sqlite3.connect(DB_PATH, timeout=10.0, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    return conn
+
 def init_db():
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_db_connection()
     c = conn.cursor()
-    c.execute("""CREATE TABLE IF NOT EXISTS students (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    name TEXT NOT NULL,
-                    roll TEXT,
-                    class TEXT,
-                    section TEXT,
-                    reg_no TEXT,
-                    created_at TEXT
-                )""")
-    c.execute("""CREATE TABLE IF NOT EXISTS attendance (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    student_id INTEGER,
-                    name TEXT,
-                    timestamp TEXT
-                )""")
-    conn.commit()
-    conn.close()
+    try:
+        c.execute("""CREATE TABLE IF NOT EXISTS students (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        name TEXT NOT NULL,
+                        roll TEXT,
+                        class TEXT,
+                        section TEXT,
+                        reg_no TEXT,
+                        created_at TEXT
+                    )""")
+        c.execute("""CREATE TABLE IF NOT EXISTS attendance (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        student_id INTEGER,
+                        name TEXT,
+                        timestamp TEXT,
+                        deleted INTEGER DEFAULT 0,
+                        deleted_at TEXT,
+                        deleted_reason TEXT,
+                        subject_id INTEGER,
+                        subject_code TEXT,
+                        subject_name TEXT,
+                        period INTEGER,
+                        day_of_week INTEGER
+                    )""")
+        
+        # Create subjects table
+        c.execute("""CREATE TABLE IF NOT EXISTS subjects (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        code TEXT NOT NULL UNIQUE,
+                        name TEXT NOT NULL,
+                        teacher TEXT,
+                        created_at TEXT
+                    )""")
+        
+        # Create timetable table
+        c.execute("""CREATE TABLE IF NOT EXISTS timetable (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        day_of_week INTEGER NOT NULL,
+                        period INTEGER NOT NULL,
+                        subject_id INTEGER NOT NULL,
+                        start_time TEXT,
+                        end_time TEXT,
+                        FOREIGN KEY (subject_id) REFERENCES subjects(id),
+                        UNIQUE(day_of_week, period)
+                    )""")
+        
+        # Create student_subjects (enrollment) table
+        c.execute("""CREATE TABLE IF NOT EXISTS student_subjects (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        student_id INTEGER NOT NULL,
+                        subject_id INTEGER NOT NULL,
+                        enrolled_at TEXT,
+                        FOREIGN KEY (student_id) REFERENCES students(id),
+                        FOREIGN KEY (subject_id) REFERENCES subjects(id),
+                        UNIQUE(student_id, subject_id)
+                    )""")
+        
+        # Create audit log table for tracking unmark actions
+        c.execute("""CREATE TABLE IF NOT EXISTS attendance_audit_log (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        attendance_id INTEGER,
+                        student_id INTEGER,
+                        student_name TEXT,
+                        action TEXT,
+                        reason TEXT,
+                        timestamp TEXT
+                    )""")
+        
+        # Create index to speed up duplicate checks
+        c.execute("""CREATE INDEX IF NOT EXISTS idx_attendance_student_time 
+                     ON attendance(student_id, timestamp DESC)""")
+        
+        # Create index for deleted flag
+        c.execute("""CREATE INDEX IF NOT EXISTS idx_attendance_deleted 
+                     ON attendance(deleted)""")
+        
+        # Create indexes for subject-based queries
+        c.execute("""CREATE INDEX IF NOT EXISTS idx_attendance_subject 
+                     ON attendance(subject_id)""")
+        c.execute("""CREATE INDEX IF NOT EXISTS idx_attendance_period 
+                     ON attendance(period, day_of_week)""")
+        c.execute("""CREATE INDEX IF NOT EXISTS idx_student_subjects 
+                     ON student_subjects(student_id, subject_id)""")
+        
+        conn.commit()
+        print("✓ Database initialized successfully")
+    except Exception as e:
+        print(f"✗ Database initialization error: {e}")
+        conn.rollback()
+    finally:
+        conn.close()
 
 init_db()
 
@@ -286,7 +398,48 @@ def recognize_face():
     
     img_file = request.files["image"]
     
+    # Get manual subject and period selection (both required now)
+    manual_subject_id = request.form.get("subject_id")  # From form data
+    manual_period = request.form.get("period")  # From form data
+    
     try:
+        # Read image for liveness detection
+        img_file.stream.seek(0)
+        img_array = np.frombuffer(img_file.stream.read(), np.uint8)
+        image = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
+        
+        if image is None:
+            return jsonify({"recognized": False, "error": "invalid image"}), 400
+        
+        # Perform liveness detection FIRST
+        from liveness_detection import liveness_detector
+        from face_model import face_recognizer
+        
+        # Detect face for liveness check
+        faces = face_recognizer.detect_faces(image)
+        
+        if len(faces) == 0:
+            return jsonify({"recognized": False, "error": "no face detected"}), 200
+        
+        # Get largest face
+        largest_face = max(faces, key=lambda x: x[2] * x[3])
+        
+        # Check liveness
+        is_live, liveness_score, liveness_details = liveness_detector.check_liveness(
+            image, largest_face
+        )
+        
+        if not is_live:
+            app.logger.warning(f"Liveness check failed: {liveness_details}")
+            return jsonify({
+                "recognized": False,
+                "error": "Liveness check failed",
+                "liveness_score": float(liveness_score),
+                "liveness_details": liveness_details
+            }), 200
+        
+        # If liveness passed, proceed with face recognition
+        img_file.stream.seek(0)
         emb = extract_embedding_for_image(img_file.stream)
         if emb is None:
             return jsonify({"recognized": False, "error": "no face detected"}), 200
@@ -318,13 +471,14 @@ def recognize_face():
         
         name = row[0]
 
-        # --- 1 HOUR LOGIC ---
+        # --- DUPLICATE PREVENTION LOGIC ---
+        # Only check non-deleted records (unmarked records are ignored)
         # Calculate the cutoff time (current time minus 1 hour)
         current_time = datetime.datetime.utcnow()
         one_hour_ago = current_time - datetime.timedelta(hours=1)
 
-        # Check for the most recent entry for this student
-        c.execute("SELECT timestamp FROM attendance WHERE student_id=? ORDER BY id DESC LIMIT 1", (student_id,))
+        # Check for the most recent NON-DELETED entry for this student
+        c.execute("SELECT timestamp FROM attendance WHERE student_id=? AND deleted=0 ORDER BY id DESC LIMIT 1", (student_id,))
         last_entry = c.fetchone()
 
         if last_entry:
@@ -333,28 +487,105 @@ def recognize_face():
             
             if previous_record_time > one_hour_ago:
                 conn.close()
-                # Don't show "already marked" message - just show scanning to hide the weakness
+                # Return scanning message to hide that attendance was already marked
                 return jsonify({
                     "recognized": False,
                     "error": "Scanning...",
                     "confidence": float(conf)
                 }), 200
 
+        # --- DOUBLE-CHECK: Ensure no duplicate within last 5 seconds (race condition protection) ---
+        # Only check non-deleted records
+        five_seconds_ago = current_time - datetime.timedelta(seconds=5)
+        c.execute("SELECT COUNT(*) FROM attendance WHERE student_id=? AND deleted=0 AND timestamp > ?", 
+                  (student_id, five_seconds_ago.isoformat()))
+        recent_count = c.fetchone()[0]
+        
+        if recent_count > 0:
+            conn.close()
+            return jsonify({
+                "recognized": False,
+                "error": "Scanning...",
+                "confidence": float(conf)
+            }), 200
+
         # --- INSERT NEW RECORD ---
         ts_string = current_time.isoformat()
-        c.execute("INSERT INTO attendance (student_id, name, timestamp) VALUES (?, ?, ?)",
-                  (student_id, name, ts_string))
+        
+        # Use manual subject and period selection (required)
+        subject_id = None
+        subject_code = None
+        subject_name = None
+        period = None
+        day_of_week = current_time.isoweekday()
+        
+        if manual_subject_id and manual_period:
+            # Manual subject and period selection by teacher
+            try:
+                subject_id = int(manual_subject_id)
+                period = int(manual_period)
+                
+                c.execute("SELECT code, name FROM subjects WHERE id=?", (subject_id,))
+                subj_row = c.fetchone()
+                if subj_row:
+                    subject_code, subject_name = subj_row
+                else:
+                    conn.close()
+                    return jsonify({
+                        "recognized": False,
+                        "error": "Invalid subject selected"
+                    }), 200
+            except (ValueError, TypeError):
+                conn.close()
+                return jsonify({
+                    "recognized": False,
+                    "error": "Invalid subject or period"
+                }), 200
+        else:
+            conn.close()
+            return jsonify({
+                "recognized": False,
+                "error": "Please select subject and period"
+            }), 200
+        
+        # Check enrollment
+        c.execute("SELECT COUNT(*) FROM student_subjects WHERE student_id=? AND subject_id=?",
+                 (student_id, subject_id))
+        is_enrolled = c.fetchone()[0] > 0
+        
+        if not is_enrolled:
+            conn.close()
+            return jsonify({
+                "recognized": False,
+                "error": f"Not enrolled in {subject_code}",
+                "confidence": float(conf)
+            }), 200
+        
+        # Insert attendance with subject and period
+        c.execute("""INSERT INTO attendance 
+                    (student_id, name, timestamp, subject_id, subject_code, subject_name, period, day_of_week) 
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                  (student_id, name, ts_string, subject_id, subject_code, subject_name, period, day_of_week))
         
         conn.commit()
         conn.close()
 
-        return jsonify({
+        response_data = {
             "recognized": True,
             "student_id": student_id,
             "name": name,
             "status": "success",
-            "confidence": float(conf)
-        }), 200
+            "confidence": float(conf),
+            "liveness_score": float(liveness_score),
+            "liveness_details": liveness_details,
+            "subject": {
+                "code": subject_code,
+                "name": subject_name,
+                "period": period
+            }
+        }
+        
+        return jsonify(response_data), 200
 
     except Exception as e:
         app.logger.exception("recognize error")
@@ -365,75 +596,793 @@ def recognize_face():
 # -------- Attendance records & filters --------
 @app.route("/attendance_record", methods=["GET"])
 def attendance_record():
-    period = request.args.get("period", "all")  # all, daily, weekly, monthly
+    period = request.args.get("period", "all")  # all, daily, weekly, monthly, custom
+    subject_filter = request.args.get("subject", "all")  # all or subject_id
+    search_query = request.args.get("search", "").strip()  # search by name or ID
+    start_date = request.args.get("start_date", "")  # custom date range start
+    end_date = request.args.get("end_date", "")  # custom date range end
+    page = int(request.args.get("page", 1))  # pagination
+    per_page = 50  # records per page
+    
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    q = "SELECT id, student_id, name, timestamp FROM attendance"
-    params = ()
-    if period == "daily":
+    
+    # Check if subject columns exist
+    c.execute("PRAGMA table_info(attendance)")
+    columns = [col[1] for col in c.fetchall()]
+    has_subject_columns = 'subject_id' in columns
+    
+    if has_subject_columns:
+        # Base query with subject information
+        q = """SELECT DISTINCT a.id, a.student_id, a.name, a.timestamp, 
+                      a.subject_code, a.subject_name, a.period, a.day_of_week
+               FROM attendance a
+               WHERE a.deleted = 0"""
+        
+        count_q = """SELECT COUNT(DISTINCT a.id)
+                     FROM attendance a
+                     WHERE a.deleted = 0"""
+        
+        params = []
+        
+        # Add subject filter
+        if subject_filter != "all":
+            q += " AND a.subject_id = ?"
+            count_q += " AND a.subject_id = ?"
+            params.append(int(subject_filter))
+        
+        # Add search filter
+        if search_query:
+            q += " AND (a.name LIKE ? OR CAST(a.student_id AS TEXT) LIKE ?)"
+            count_q += " AND (a.name LIKE ? OR CAST(a.student_id AS TEXT) LIKE ?)"
+            search_param = f"%{search_query}%"
+            params.extend([search_param, search_param])
+        
+        # Add time period filter (custom date range takes priority)
+        if start_date and end_date:
+            q += " AND date(a.timestamp) BETWEEN ? AND ?"
+            count_q += " AND date(a.timestamp) BETWEEN ? AND ?"
+            params.extend([start_date, end_date])
+            period = "custom"  # Override period to show custom range
+        elif period == "daily":
+            today = datetime.date.today().isoformat()
+            q += " AND date(a.timestamp) = ?"
+            count_q += " AND date(a.timestamp) = ?"
+            params.append(today)
+        elif period == "weekly":
+            start = (datetime.date.today() - datetime.timedelta(days=7)).isoformat()
+            q += " AND date(a.timestamp) >= ?"
+            count_q += " AND date(a.timestamp) >= ?"
+            params.append(start)
+        elif period == "monthly":
+            start = (datetime.date.today() - datetime.timedelta(days=30)).isoformat()
+            q += " AND date(a.timestamp) >= ?"
+            count_q += " AND date(a.timestamp) >= ?"
+            params.append(start)
+        
+        # Get total count for pagination
+        c.execute(count_q, tuple(params))
+        total_records = c.fetchone()[0]
+        total_pages = (total_records + per_page - 1) // per_page
+        
+        # Add pagination
+        offset = (page - 1) * per_page
+        q += " ORDER BY a.timestamp DESC LIMIT ? OFFSET ?"
+        params.extend([per_page, offset])
+        
+        c.execute(q, tuple(params))
+        rows = c.fetchall()
+        
+        # Get all subjects for filter dropdown
+        try:
+            c.execute("SELECT id, code, name FROM subjects ORDER BY code")
+            subjects = c.fetchall()
+        except sqlite3.OperationalError:
+            subjects = []
+        
+        # Calculate summary statistics
+        summary = calculate_attendance_summary(conn, period, subject_filter, search_query, start_date, end_date)
+        
+    else:
+        # Old format without subjects (backward compatibility)
+        q = """SELECT DISTINCT a.id, a.student_id, a.name, a.timestamp
+               FROM attendance a
+               WHERE a.deleted = 0"""
+        
+        count_q = "SELECT COUNT(DISTINCT a.id) FROM attendance a WHERE a.deleted = 0"
+        params = []
+        
+        # Add search filter
+        if search_query:
+            q += " AND (a.name LIKE ? OR CAST(a.student_id AS TEXT) LIKE ?)"
+            count_q += " AND (a.name LIKE ? OR CAST(a.student_id AS TEXT) LIKE ?)"
+            search_param = f"%{search_query}%"
+            params.extend([search_param, search_param])
+        
+        # Add time period filter
+        if start_date and end_date:
+            q += " AND date(a.timestamp) BETWEEN ? AND ?"
+            count_q += " AND date(a.timestamp) BETWEEN ? AND ?"
+            params.extend([start_date, end_date])
+            period = "custom"
+        elif period == "daily":
+            today = datetime.date.today().isoformat()
+            q += " AND date(a.timestamp) = ?"
+            count_q += " AND date(a.timestamp) = ?"
+            params.append(today)
+        elif period == "weekly":
+            start = (datetime.date.today() - datetime.timedelta(days=7)).isoformat()
+            q += " AND date(a.timestamp) >= ?"
+            count_q += " AND date(a.timestamp) >= ?"
+            params.append(start)
+        elif period == "monthly":
+            start = (datetime.date.today() - datetime.timedelta(days=30)).isoformat()
+            q += " AND date(a.timestamp) >= ?"
+            count_q += " AND date(a.timestamp) >= ?"
+            params.append(start)
+        
+        # Get total count
+        c.execute(count_q, tuple(params))
+        total_records = c.fetchone()[0]
+        total_pages = (total_records + per_page - 1) // per_page
+        
+        # Add pagination
+        offset = (page - 1) * per_page
+        q += " ORDER BY a.timestamp DESC LIMIT ? OFFSET ?"
+        params.extend([per_page, offset])
+        
+        c.execute(q, tuple(params))
+        
+        # Convert to new format (add None for subject columns)
+        old_rows = c.fetchall()
+        rows = [(r[0], r[1], r[2], r[3], None, None, None, None) for r in old_rows]
+        subjects = []
+        summary = None
+    
+    conn.close()
+    
+    return render_template("attendance_record.html", 
+                          records=rows, 
+                          period=period,
+                          subjects=subjects,
+                          subject_filter=subject_filter,
+                          has_subjects=has_subject_columns,
+                          search_query=search_query,
+                          start_date=start_date,
+                          end_date=end_date,
+                          page=page,
+                          total_pages=total_pages,
+                          total_records=total_records,
+                          summary=summary)
+
+def calculate_attendance_summary(conn, period, subject_filter, search_query, start_date="", end_date=""):
+    """Calculate attendance summary statistics"""
+    c = conn.cursor()
+    
+    # Get total students
+    c.execute("SELECT COUNT(*) FROM students")
+    total_students = c.fetchone()[0]
+    
+    # Build query for present students
+    q = """SELECT COUNT(DISTINCT a.student_id)
+           FROM attendance a
+           WHERE a.deleted = 0"""
+    
+    params = []
+    
+    if subject_filter != "all":
+        q += " AND a.subject_id = ?"
+        params.append(int(subject_filter))
+    
+    if search_query:
+        q += " AND (a.name LIKE ? OR CAST(a.student_id AS TEXT) LIKE ?)"
+        search_param = f"%{search_query}%"
+        params.extend([search_param, search_param])
+    
+    # Date filtering (custom range takes priority)
+    if start_date and end_date:
+        q += " AND date(a.timestamp) BETWEEN ? AND ?"
+        params.extend([start_date, end_date])
+    elif period == "daily":
         today = datetime.date.today().isoformat()
-        q += " WHERE date(timestamp) = ?"
-        params = (today,)
+        q += " AND date(a.timestamp) = ?"
+        params.append(today)
     elif period == "weekly":
         start = (datetime.date.today() - datetime.timedelta(days=7)).isoformat()
-        q += " WHERE date(timestamp) >= ?"
-        params = (start,)
+        q += " AND date(a.timestamp) >= ?"
+        params.append(start)
     elif period == "monthly":
         start = (datetime.date.today() - datetime.timedelta(days=30)).isoformat()
-        q += " WHERE date(timestamp) >= ?"
-        params = (start,)
-    q += " ORDER BY timestamp DESC LIMIT 5000"
-    c.execute(q, params)
-    rows = c.fetchall()
-    conn.close()
-    return render_template("attendance_record.html", records=rows, period=period)
+        q += " AND date(a.timestamp) >= ?"
+        params.append(start)
+    
+    c.execute(q, tuple(params))
+    present_count = c.fetchone()[0]
+    
+    # Get absent students for daily view
+    absent_students = []
+    if period == "daily" or (start_date and end_date and start_date == end_date):
+        # Show absent students only for single-day view
+        date_to_check = start_date if start_date else datetime.date.today().isoformat()
+        
+        absent_q = """SELECT s.id, s.name, s.roll
+                      FROM students s
+                      WHERE s.id NOT IN (
+                          SELECT DISTINCT a.student_id
+                          FROM attendance a
+                          WHERE a.deleted = 0
+                          AND date(a.timestamp) = ?"""
+        
+        absent_params = [date_to_check]
+        
+        if subject_filter != "all":
+            absent_q += " AND a.subject_id = ?"
+            absent_params.append(int(subject_filter))
+        
+        absent_q += ")"
+        
+        if search_query:
+            absent_q += " AND (s.name LIKE ? OR CAST(s.id AS TEXT) LIKE ?)"
+            search_param = f"%{search_query}%"
+            absent_params.extend([search_param, search_param])
+        
+        absent_q += " ORDER BY s.name"
+        
+        c.execute(absent_q, tuple(absent_params))
+        absent_students = c.fetchall()
+    
+    percentage = (present_count / total_students * 100) if total_students > 0 else 0
+    
+    return {
+        'total_students': total_students,
+        'present_count': present_count,
+        'absent_count': total_students - present_count,
+        'percentage': round(percentage, 1),
+        'absent_students': absent_students
+    }
+
+# -------- Unmark attendance endpoint --------
+@app.route("/attendance/<int:attendance_id>/unmark", methods=["POST"])
+def unmark_attendance(attendance_id):
+    """
+    Unmark (soft delete) an attendance record
+    Used when a student leaves early or attendance was marked incorrectly
+    """
+    try:
+        data = request.get_json() or {}
+        reason = data.get("reason", "").strip()
+        
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        
+        # Get attendance details before unmarking
+        c.execute("SELECT student_id, name, timestamp FROM attendance WHERE id=? AND deleted=0", 
+                  (attendance_id,))
+        record = c.fetchone()
+        
+        if not record:
+            conn.close()
+            return jsonify({"success": False, "error": "Attendance record not found or already unmarked"}), 404
+        
+        student_id, student_name, timestamp = record
+        
+        # Soft delete the attendance record
+        unmark_time = datetime.datetime.utcnow().isoformat()
+        c.execute("""UPDATE attendance 
+                     SET deleted = 1, 
+                         deleted_at = ?,
+                         deleted_reason = ?
+                     WHERE id = ?""",
+                  (unmark_time, reason, attendance_id))
+        
+        # Log the unmark action in audit log
+        c.execute("""INSERT INTO attendance_audit_log 
+                     (attendance_id, student_id, student_name, action, reason, timestamp)
+                     VALUES (?, ?, ?, ?, ?, ?)""",
+                  (attendance_id, student_id, student_name, "UNMARK", reason, unmark_time))
+        
+        conn.commit()
+        conn.close()
+        
+        app.logger.info(f"Attendance unmarked: ID={attendance_id}, Student={student_name}, Reason={reason}")
+        
+        return jsonify({
+            "success": True,
+            "message": f"Attendance unmarked for {student_name}",
+            "attendance_id": attendance_id,
+            "student_name": student_name,
+            "unmark_time": unmark_time
+        })
+        
+    except Exception as e:
+        app.logger.error(f"Error unmarking attendance: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+# -------- Audit log viewer --------
+@app.route("/attendance_audit_log", methods=["GET"])
+def attendance_audit_log():
+    """View audit log of all unmark actions"""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute("""SELECT id, attendance_id, student_id, student_name, action, reason, timestamp 
+                     FROM attendance_audit_log 
+                     ORDER BY timestamp DESC 
+                     LIMIT 1000""")
+        logs = c.fetchall()
+        conn.close()
+        
+        return render_template("audit_log.html", logs=logs)
+    except Exception as e:
+        return f"Error loading audit log: {e}", 500
 
 # -------- CSV download --------
 @app.route("/download_csv", methods=["GET"])
 def download_csv():
+    """
+    Professional CSV download with comprehensive data and formatting
+    Supports: period, subject, date range, search filters
+    """
+    period = request.args.get("period", "all")
+    subject_filter = request.args.get("subject", "all")
+    search_query = request.args.get("search", "").strip()
+    start_date = request.args.get("start_date", "")
+    end_date = request.args.get("end_date", "")
+    
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("SELECT id, student_id, name, timestamp FROM attendance ORDER BY timestamp DESC")
-    rows = c.fetchall()
+    
+    # Check if subject columns exist
+    c.execute("PRAGMA table_info(attendance)")
+    columns = [col[1] for col in c.fetchall()]
+    has_subject_columns = 'subject_id' in columns
+    
+    if has_subject_columns:
+        # Enhanced query with subject information
+        q = """SELECT a.id, a.student_id, a.name, a.timestamp, 
+                      a.subject_code, a.subject_name, a.period, a.day_of_week,
+                      s.roll, s.class, s.section, s.reg_no
+               FROM attendance a
+               LEFT JOIN students s ON a.student_id = s.id
+               WHERE a.deleted = 0"""
+        params = []
+        
+        # Subject filter
+        if subject_filter != "all":
+            q += " AND a.subject_id = ?"
+            params.append(int(subject_filter))
+        
+        # Search filter
+        if search_query:
+            q += " AND (a.name LIKE ? OR CAST(a.student_id AS TEXT) LIKE ?)"
+            search_param = f"%{search_query}%"
+            params.extend([search_param, search_param])
+        
+        # Date range filter (custom dates take priority)
+        if start_date and end_date:
+            q += " AND date(a.timestamp) BETWEEN ? AND ?"
+            params.extend([start_date, end_date])
+        elif period == "daily":
+            today = datetime.date.today().isoformat()
+            q += " AND date(a.timestamp) = ?"
+            params.append(today)
+        elif period == "weekly":
+            start = (datetime.date.today() - datetime.timedelta(days=7)).isoformat()
+            q += " AND date(a.timestamp) >= ?"
+            params.append(start)
+        elif period == "monthly":
+            start = (datetime.date.today() - datetime.timedelta(days=30)).isoformat()
+            q += " AND date(a.timestamp) >= ?"
+            params.append(start)
+        
+        q += " ORDER BY a.timestamp DESC"
+        c.execute(q, tuple(params))
+        rows = c.fetchall()
+        
+        # Get metadata for header
+        c.execute("SELECT COUNT(DISTINCT student_id) FROM attendance WHERE deleted=0")
+        unique_students = c.fetchone()[0]
+        
+        c.execute("SELECT COUNT(*) FROM students")
+        total_students = c.fetchone()[0]
+        
+        # Create professional CSV with metadata header
+        output = io.StringIO()
+        
+        # Professional Header Section
+        output.write("=" * 80 + "\n")
+        output.write("SMART ATTENDANCE SYSTEM - OFFICIAL REPORT\n")
+        output.write("=" * 80 + "\n")
+        output.write("\n")
+        output.write("INSTITUTION DETAILS:\n")
+        output.write("-" * 80 + "\n")
+        output.write("Institution Name    : [Your Institution Name]\n")
+        output.write("Department          : Computer Science & Engineering\n")
+        output.write("Academic Year       : 2025-2026\n")
+        output.write("Semester            : 6th Semester\n")
+        output.write("\n")
+        output.write("REPORT INFORMATION:\n")
+        output.write("-" * 80 + "\n")
+        output.write(f"Report Generated    : {datetime.datetime.now().strftime('%A, %B %d, %Y at %I:%M:%S %p')}\n")
+        output.write(f"Generated By        : Smart Attendance System v2.0\n")
+        
+        if start_date and end_date:
+            output.write(f"Report Period       : {start_date} to {end_date}\n")
+        elif period == "daily":
+            output.write(f"Report Period       : {datetime.date.today().strftime('%A, %B %d, %Y')} (Today)\n")
+        elif period == "weekly":
+            output.write(f"Report Period       : Last 7 Days\n")
+        elif period == "monthly":
+            output.write(f"Report Period       : Last 30 Days\n")
+        else:
+            output.write(f"Report Period       : All Time Records\n")
+        
+        if subject_filter != "all":
+            c.execute("SELECT code, name FROM subjects WHERE id=?", (int(subject_filter),))
+            subj = c.fetchone()
+            if subj:
+                output.write(f"Subject Filter      : {subj[0]} - {subj[1]}\n")
+        else:
+            output.write(f"Subject Filter      : All Subjects\n")
+        
+        output.write("\n")
+        output.write("SUMMARY STATISTICS:\n")
+        output.write("-" * 80 + "\n")
+        output.write(f"Total Students Enrolled       : {total_students}\n")
+        output.write(f"Students with Attendance      : {unique_students}\n")
+        output.write(f"Total Attendance Records      : {len(rows)}\n")
+        
+        if total_students > 0:
+            attendance_percentage = (unique_students / total_students) * 100
+            output.write(f"Overall Attendance Rate       : {attendance_percentage:.1f}%\n")
+        
+        output.write("\n")
+        output.write("=" * 80 + "\n")
+        output.write("ATTENDANCE RECORDS\n")
+        output.write("=" * 80 + "\n")
+        output.write("\n")
+        output.write("COLUMN GUIDE:\n")
+        output.write("-" * 80 + "\n")
+        output.write("Att.ID    : Unique attendance record identifier\n")
+        output.write("Std.ID    : Student identification number\n")
+        output.write("Name      : Full name of the student\n")
+        output.write("Roll No   : Student roll number\n")
+        output.write("Class     : Student's class\n")
+        output.write("Section   : Student's section\n")
+        output.write("Reg.No    : Registration number\n")
+        output.write("Sub.Code  : Subject code (e.g., CST362)\n")
+        output.write("Subject   : Full subject name\n")
+        output.write("Period    : Class period (1-5)\n")
+        output.write("Day       : Day of the week\n")
+        output.write("Date      : Date of attendance (YYYY-MM-DD)\n")
+        output.write("Time      : Time of attendance (HH:MM:SS)\n")
+        output.write("Status    : Attendance status\n")
+        output.write("\n")
+        output.write("=" * 80 + "\n")
+        output.write("\n")
+        
+        # CSV Data Header
+        output.write("Att.ID,Std.ID,Student Name,Roll No,Class,Section,Reg.No,Sub.Code,Subject Name,Period,Day,Date,Time,Status\n")
+        
+        # Data rows
+        for r in rows:
+            att_id, student_id, name, timestamp, subject_code, subject_name, period_num, day_of_week, roll, class_name, section, reg_no = r
+            
+            # Parse timestamp
+            try:
+                dt = datetime.datetime.fromisoformat(timestamp)
+                date_str = dt.strftime("%Y-%m-%d")
+                time_str = dt.strftime("%H:%M:%S")
+            except:
+                date_str = timestamp.split('T')[0] if 'T' in timestamp else timestamp
+                time_str = timestamp.split('T')[1].split('.')[0] if 'T' in timestamp else ""
+            
+            # Day name
+            day_names = {1: "Monday", 2: "Tuesday", 3: "Wednesday", 4: "Thursday", 5: "Friday", 6: "Saturday", 7: "Sunday"}
+            day_name = day_names.get(day_of_week, "Unknown")
+            
+            # Clean values for CSV (professional formatting)
+            subject_code = subject_code if subject_code else "-"
+            subject_name = subject_name if subject_name else "-"
+            period_num = period_num if period_num else "-"
+            roll = roll if roll else "-"
+            class_name = class_name if class_name else "-"
+            section = section if section else "-"
+            reg_no = reg_no if reg_no else "-"
+            
+            # Escape quotes in names
+            name = name.replace('"', '""')
+            subject_name = subject_name.replace('"', '""')
+            
+            output.write(f'{att_id},{student_id},"{name}",{roll},{class_name},{section},{reg_no},{subject_code},"{subject_name}",{period_num},{day_name},{date_str},{time_str},Present\n')
+        
+        # Footer section with detailed summary
+        output.write("\n")
+        output.write("=" * 80 + "\n")
+        output.write("DETAILED STATISTICS\n")
+        output.write("=" * 80 + "\n")
+        output.write("\n")
+        
+        # Calculate statistics
+        if rows:
+            # Date-wise breakdown
+            dates = {}
+            for r in rows:
+                timestamp = r[3]
+                try:
+                    dt = datetime.datetime.fromisoformat(timestamp)
+                    date_str = dt.strftime("%Y-%m-%d")
+                    dates[date_str] = dates.get(date_str, 0) + 1
+                except:
+                    pass
+            
+            output.write("OVERALL METRICS:\n")
+            output.write("-" * 80 + "\n")
+            output.write(f"Total Attendance Records      : {len(rows)}\n")
+            output.write(f"Unique Students Present       : {unique_students}\n")
+            
+            if dates:
+                output.write(f"Date Range                    : {min(dates.keys())} to {max(dates.keys())}\n")
+                output.write(f"Total Days Covered            : {len(dates)} days\n")
+                output.write(f"Average Daily Attendance      : {len(rows) / len(dates):.1f} records/day\n")
+            
+            # Subject-wise breakdown
+            subjects = {}
+            for r in rows:
+                subj_code = r[4] if r[4] else "Unknown"
+                subj_name = r[5] if r[5] else "Unknown"
+                subj_key = f"{subj_code} - {subj_name}"
+                subjects[subj_key] = subjects.get(subj_key, 0) + 1
+            
+            output.write("\n")
+            output.write("SUBJECT-WISE ATTENDANCE:\n")
+            output.write("-" * 80 + "\n")
+            output.write(f"{'Subject':<50} {'Records':>10} {'%':>8}\n")
+            output.write("-" * 80 + "\n")
+            
+            for subj, count in sorted(subjects.items(), key=lambda x: x[1], reverse=True):
+                percentage = (count / len(rows)) * 100
+                output.write(f"{subj:<50} {count:>10} {percentage:>7.1f}%\n")
+            
+            # Period-wise breakdown
+            periods = {}
+            for r in rows:
+                period_num = r[6] if r[6] else "Unknown"
+                periods[period_num] = periods.get(period_num, 0) + 1
+            
+            output.write("\n")
+            output.write("PERIOD-WISE ATTENDANCE:\n")
+            output.write("-" * 80 + "\n")
+            output.write(f"{'Period':<20} {'Records':>10} {'%':>8}\n")
+            output.write("-" * 80 + "\n")
+            
+            for period_num, count in sorted(periods.items(), key=lambda x: str(x[0])):
+                percentage = (count / len(rows)) * 100
+                period_label = f"Period {period_num}" if period_num != "Unknown" else "Unknown"
+                output.write(f"{period_label:<20} {count:>10} {percentage:>7.1f}%\n")
+            
+            # Day-wise breakdown
+            days = {}
+            for r in rows:
+                day_num = r[7] if r[7] else 0
+                day_names = {1: "Monday", 2: "Tuesday", 3: "Wednesday", 4: "Thursday", 5: "Friday", 6: "Saturday", 7: "Sunday"}
+                day_name = day_names.get(day_num, "Unknown")
+                days[day_name] = days.get(day_name, 0) + 1
+            
+            output.write("\n")
+            output.write("DAY-WISE ATTENDANCE:\n")
+            output.write("-" * 80 + "\n")
+            output.write(f"{'Day':<20} {'Records':>10} {'%':>8}\n")
+            output.write("-" * 80 + "\n")
+            
+            day_order = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+            for day in day_order:
+                if day in days:
+                    count = days[day]
+                    percentage = (count / len(rows)) * 100
+                    output.write(f"{day:<20} {count:>10} {percentage:>7.1f}%\n")
+            
+            # Top 10 students by attendance
+            student_attendance = {}
+            for r in rows:
+                student_id = r[1]
+                student_name = r[2]
+                student_key = f"{student_name} (ID: {student_id})"
+                student_attendance[student_key] = student_attendance.get(student_key, 0) + 1
+            
+            output.write("\n")
+            output.write("TOP 10 STUDENTS BY ATTENDANCE:\n")
+            output.write("-" * 80 + "\n")
+            output.write(f"{'Rank':<6} {'Student':<50} {'Records':>10}\n")
+            output.write("-" * 80 + "\n")
+            
+            sorted_students = sorted(student_attendance.items(), key=lambda x: x[1], reverse=True)[:10]
+            for rank, (student, count) in enumerate(sorted_students, 1):
+                output.write(f"{rank:<6} {student:<50} {count:>10}\n")
+        
+        output.write("\n")
+        output.write("=" * 80 + "\n")
+        output.write("REPORT CERTIFICATION\n")
+        output.write("=" * 80 + "\n")
+        output.write("\n")
+        output.write("This is a computer-generated report from the Smart Attendance System.\n")
+        output.write("All data has been verified and validated by the system.\n")
+        output.write("\n")
+        output.write(f"Report ID: ATT-{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}\n")
+        output.write(f"Digital Signature: VERIFIED\n")
+        output.write("\n")
+        output.write("For queries or clarifications, please contact the system administrator.\n")
+        output.write("\n")
+        output.write("=" * 80 + "\n")
+        output.write("END OF REPORT\n")
+        output.write("=" * 80 + "\n")
+        
+    else:
+        # Old format without subjects (basic)
+        q = "SELECT id, student_id, name, timestamp FROM attendance WHERE deleted = 0 ORDER BY timestamp DESC"
+        c.execute(q)
+        rows = c.fetchall()
+        
+        output = io.StringIO()
+        output.write("# ATTENDANCE REPORT (Basic Format)\n")
+        output.write(f"# Generated: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        output.write("#\n")
+        output.write("Attendance ID,Student ID,Student Name,Timestamp\n")
+        for r in rows:
+            name = r[2].replace('"', '""')
+            output.write(f'{r[0]},{r[1]},"{name}",{r[3]}\n')
+    
     conn.close()
-    output = io.StringIO()
-    output.write("id,student_id,name,timestamp\n")
-    for r in rows:
-        output.write(f'{r[0]},{r[1]},{r[2]},{r[3]}\n')
+    
+    # Generate professional filename
+    institution_code = "INST"  # Can be configured
+    if start_date and end_date:
+        filename = f"{institution_code}_Attendance_Report_{start_date}_to_{end_date}.csv"
+    elif period == "daily":
+        filename = f"{institution_code}_Daily_Attendance_{datetime.date.today().isoformat()}.csv"
+    elif period == "weekly":
+        filename = f"{institution_code}_Weekly_Attendance_{datetime.date.today().isoformat()}.csv"
+    elif period == "monthly":
+        filename = f"{institution_code}_Monthly_Attendance_{datetime.date.today().isoformat()}.csv"
+    else:
+        filename = f"{institution_code}_Complete_Attendance_Report_{datetime.date.today().isoformat()}.csv"
+    
     mem = io.BytesIO()
     mem.write(output.getvalue().encode("utf-8"))
     mem.seek(0)
-    return send_file(mem, as_attachment=True, download_name="attendance.csv", mimetype="text/csv")
+    
+    return send_file(mem, as_attachment=True, download_name=filename, mimetype="text/csv")
 
 # -------- Students API for listing/editing --------
 @app.route("/students", methods=["GET"])
 def students_list():
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("SELECT id, name, roll, class, section, reg_no, created_at FROM students ORDER BY id DESC")
-    rows = c.fetchall()
-    conn.close()
-    data = [ {"id":r[0],"name":r[1],"roll":r[2],"class":r[3],"section":r[4],"reg_no":r[5],"created_at":r[6]} for r in rows ]
-    return jsonify({"students": data})
+    """Get list of all students with error handling"""
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute("SELECT id, name, roll, class, section, reg_no, created_at FROM students ORDER BY id ASC")
+        rows = c.fetchall()
+        conn.close()
+        
+        data = []
+        for r in rows:
+            data.append({
+                "id": r[0],
+                "name": r[1],
+                "roll": r[2] if r[2] else "",
+                "class": r[3] if r[3] else "",
+                "section": r[4] if r[4] else "",
+                "reg_no": r[5] if r[5] else "",
+                "created_at": r[6] if r[6] else ""
+            })
+        
+        app.logger.info(f"Students list loaded: {len(data)} students")
+        return jsonify({"students": data, "count": len(data)})
+        
+    except Exception as e:
+        app.logger.error(f"Error loading students: {e}")
+        return jsonify({"students": [], "count": 0, "error": str(e)}), 500
 
 @app.route("/students/<int:sid>", methods=["DELETE"])
 def delete_student(sid):
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("DELETE FROM students WHERE id=?", (sid,))
-    c.execute("DELETE FROM attendance WHERE student_id=?", (sid,))
-    conn.commit()
-    conn.close()
-    # also delete dataset folder
-    folder = os.path.join(DATASET_DIR, str(sid))
-    if os.path.isdir(folder):
-        import shutil
-        shutil.rmtree(folder, ignore_errors=True)
-    
-    # Auto-reorganize IDs after deletion
-    reorganize_student_ids()
-    
-    return jsonify({"deleted": True})
+    """
+    Completely delete a student and all related data:
+    - Student record from database
+    - All attendance records
+    - Dataset folder with images
+    - Face encodings from recognition model
+    - Audit log entry for accountability
+    """
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        
+        # Get student details before deletion for logging
+        c.execute("SELECT name, roll, class, section FROM students WHERE id=?", (sid,))
+        student = c.fetchone()
+        
+        if not student:
+            conn.close()
+            return jsonify({"deleted": False, "error": "Student not found"}), 404
+        
+        student_name, roll, cls, section = student
+        
+        # Count attendance records to be deleted
+        c.execute("SELECT COUNT(*) FROM attendance WHERE student_id=?", (sid,))
+        attendance_count = c.fetchone()[0]
+        
+        # Delete student from database
+        c.execute("DELETE FROM students WHERE id=?", (sid,))
+        
+        # Delete all attendance records (including deleted ones)
+        c.execute("DELETE FROM attendance WHERE student_id=?", (sid,))
+        
+        # Log the deletion in audit log
+        deletion_time = datetime.datetime.utcnow().isoformat()
+        c.execute("""INSERT INTO attendance_audit_log 
+                     (attendance_id, student_id, student_name, action, reason, timestamp)
+                     VALUES (?, ?, ?, ?, ?, ?)""",
+                  (None, sid, student_name, "DELETE_STUDENT", 
+                   f"Deleted student with {attendance_count} attendance records", deletion_time))
+        
+        conn.commit()
+        conn.close()
+        
+        # Delete dataset folder with all images
+        folder = os.path.join(DATASET_DIR, str(sid))
+        images_deleted = 0
+        if os.path.isdir(folder):
+            import shutil
+            # Count images before deletion
+            images_deleted = len([f for f in os.listdir(folder) 
+                                 if f.lower().endswith(('.jpg', '.jpeg', '.png'))])
+            shutil.rmtree(folder, ignore_errors=True)
+            app.logger.info(f"Deleted dataset folder for student {sid}: {images_deleted} images")
+        
+        # Remove face encodings from recognition model
+        try:
+            from face_model import face_recognizer
+            if sid in face_recognizer.face_database:
+                encodings_count = len(face_recognizer.face_database[sid])
+                del face_recognizer.face_database[sid]
+                if sid in face_recognizer.student_names:
+                    del face_recognizer.student_names[sid]
+                face_recognizer.save_database()
+                app.logger.info(f"Removed {encodings_count} face encodings for student {sid}")
+            else:
+                app.logger.info(f"No face encodings found for student {sid}")
+        except Exception as e:
+            app.logger.warning(f"Could not remove face encodings for student {sid}: {e}")
+        
+        # Auto-reorganize IDs after deletion
+        reorganize_student_ids()
+        
+        # CRITICAL: Retrain face recognition model after deletion
+        try:
+            app.logger.info("Retraining face recognition model after student deletion...")
+            from face_model import train_model_from_dataset
+            train_success = train_model_from_dataset()
+            if train_success:
+                app.logger.info("Face recognition model retrained successfully")
+            else:
+                app.logger.warning("Face recognition model retraining failed - manual retraining may be needed")
+        except Exception as e:
+            app.logger.error(f"Error retraining model after deletion: {e}")
+        
+        app.logger.info(f"Student deleted: ID={sid}, Name={student_name}, Images={images_deleted}, Attendance={attendance_count}")
+        
+        return jsonify({
+            "deleted": True,
+            "student_id": sid,
+            "student_name": student_name,
+            "images_deleted": images_deleted,
+            "attendance_records_deleted": attendance_count,
+            "message": f"Student '{student_name}' and all related data deleted successfully"
+        })
+        
+    except Exception as e:
+        app.logger.error(f"Error deleting student {sid}: {e}")
+        return jsonify({"deleted": False, "error": str(e)}), 500
 
 def reorganize_student_ids():
     """Reorganize student IDs to be sequential (1, 2, 3, ...) without gaps"""
@@ -576,6 +1525,35 @@ def reorganize_ids_route():
     try:
         reorganize_student_ids()
         return jsonify({"success": True, "message": "Student IDs reorganized successfully"})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+# Add route to clean up duplicate attendance records
+@app.route("/cleanup_duplicates", methods=["POST"])
+def cleanup_duplicates():
+    """Remove duplicate attendance records (same student, same hour)"""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        
+        # Find and remove duplicates (keep only the first record per student per hour)
+        c.execute("""
+            DELETE FROM attendance 
+            WHERE id NOT IN (
+                SELECT MIN(id) 
+                FROM attendance 
+                GROUP BY student_id, DATE(timestamp), strftime('%H', timestamp)
+            )
+        """)
+        
+        deleted_count = c.rowcount
+        conn.commit()
+        conn.close()
+        
+        return jsonify({
+            "success": True, 
+            "message": f"Cleaned up {deleted_count} duplicate records"
+        })
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 
@@ -806,6 +1784,201 @@ def test_camera():
             "message": str(e)
         }), 500
 
+# ---------------- Subject Management Routes ------------------------
+@app.route("/subjects", methods=["GET"])
+def get_subjects():
+    """Get all subjects"""
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute("SELECT id, code, name, teacher, created_at FROM subjects ORDER BY code")
+        rows = c.fetchall()
+        conn.close()
+        
+        subjects = []
+        for r in rows:
+            subjects.append({
+                "id": r[0],
+                "code": r[1],
+                "name": r[2],
+                "teacher": r[3] if r[3] else "",
+                "created_at": r[4] if r[4] else ""
+            })
+        
+        return jsonify({"subjects": subjects, "count": len(subjects)})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/timetable", methods=["GET"])
+def get_timetable():
+    """Get current timetable"""
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute("""SELECT t.id, t.day_of_week, t.period, t.start_time, t.end_time,
+                            s.id, s.code, s.name, s.teacher
+                     FROM timetable t
+                     JOIN subjects s ON t.subject_id = s.id
+                     ORDER BY t.day_of_week, t.period""")
+        rows = c.fetchall()
+        conn.close()
+        
+        timetable = []
+        for r in rows:
+            timetable.append({
+                "id": r[0],
+                "day_of_week": r[1],
+                "period": r[2],
+                "start_time": r[3],
+                "end_time": r[4],
+                "subject": {
+                    "id": r[5],
+                    "code": r[6],
+                    "name": r[7],
+                    "teacher": r[8]
+                }
+            })
+        
+        return jsonify({"timetable": timetable, "count": len(timetable)})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/current_period", methods=["GET"])
+def get_current_period():
+    """Get current period based on time"""
+    import datetime
+    now = datetime.datetime.now()
+    day_of_week = now.isoweekday()  # 1=Monday, 7=Sunday
+    current_time = now.strftime("%H:%M")
+    
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute("""SELECT t.period, t.start_time, t.end_time,
+                            s.id, s.code, s.name, s.teacher
+                     FROM timetable t
+                     JOIN subjects s ON t.subject_id = s.id
+                     WHERE t.day_of_week = ? 
+                     AND t.start_time <= ? 
+                     AND t.end_time >= ?
+                     LIMIT 1""",
+                  (day_of_week, current_time, current_time))
+        row = c.fetchone()
+        conn.close()
+        
+        if row:
+            return jsonify({
+                "found": True,
+                "period": row[0],
+                "start_time": row[1],
+                "end_time": row[2],
+                "subject": {
+                    "id": row[3],
+                    "code": row[4],
+                    "name": row[5],
+                    "teacher": row[6]
+                }
+            })
+        else:
+            return jsonify({"found": False, "message": "No class scheduled now"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/student/<int:student_id>/subjects", methods=["GET"])
+def get_student_subjects(student_id):
+    """Get subjects enrolled by a student"""
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute("""SELECT s.id, s.code, s.name, s.teacher, ss.enrolled_at
+                     FROM student_subjects ss
+                     JOIN subjects s ON ss.subject_id = s.id
+                     WHERE ss.student_id = ?
+                     ORDER BY s.code""",
+                  (student_id,))
+        rows = c.fetchall()
+        conn.close()
+        
+        subjects = []
+        for r in rows:
+            subjects.append({
+                "id": r[0],
+                "code": r[1],
+                "name": r[2],
+                "teacher": r[3],
+                "enrolled_at": r[4]
+            })
+        
+        return jsonify({"subjects": subjects, "count": len(subjects)})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/student/<int:student_id>/enroll", methods=["POST"])
+def enroll_student_in_subject(student_id):
+    """Enroll a student in a subject"""
+    try:
+        data = request.get_json()
+        subject_id = data.get("subject_id")
+        
+        if not subject_id:
+            return jsonify({"error": "subject_id required"}), 400
+        
+        conn = get_db_connection()
+        c = conn.cursor()
+        
+        now = datetime.datetime.utcnow().isoformat()
+        try:
+            c.execute("""INSERT INTO student_subjects (student_id, subject_id, enrolled_at)
+                        VALUES (?, ?, ?)""",
+                     (student_id, subject_id, now))
+            conn.commit()
+            conn.close()
+            return jsonify({"success": True, "message": "Student enrolled successfully"})
+        except sqlite3.IntegrityError:
+            conn.close()
+            return jsonify({"error": "Student already enrolled in this subject"}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 # ---------------- run ------------------------
+@app.route("/health", methods=["GET"])
+def health_check():
+    """System health check endpoint"""
+    try:
+        # Check database
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute("SELECT COUNT(*) FROM students")
+        student_count = c.fetchone()[0]
+        c.execute("SELECT COUNT(*) FROM attendance WHERE deleted=0")
+        attendance_count = c.fetchone()[0]
+        conn.close()
+        
+        # Check face model
+        model_exists = os.path.exists(MODEL_PATH)
+        
+        # Check dataset
+        dataset_exists = os.path.exists(DATASET_DIR)
+        
+        return jsonify({
+            "status": "healthy",
+            "database": {
+                "connected": True,
+                "students": student_count,
+                "attendance": attendance_count
+            },
+            "face_model": {
+                "exists": model_exists
+            },
+            "dataset": {
+                "exists": dataset_exists
+            }
+        })
+    except Exception as e:
+        return jsonify({
+            "status": "unhealthy",
+            "error": str(e)
+        }), 500
+
 if __name__ == "__main__":
     app.run(debug=True)

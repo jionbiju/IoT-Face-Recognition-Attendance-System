@@ -1,40 +1,487 @@
 <!doctype html>
-<html>
+<html lang="en">
 <head>
-  <meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>Attendance Records</title>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Attendance Records - Smart Attendance</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.1/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+  <style>
+    .deleted-row {
+      background-color: #fee2e2 !important;
+      text-decoration: line-through;
+      opacity: 0.7;
+      transition: all 0.3s ease;
+    }
+  </style>
 </head>
 <body>
-<div class="container my-4">
-  <div class="d-flex justify-content-between align-items-center mb-3">
-    <h4>Attendance Records</h4>
-    <div>
-      <a class="btn btn-outline-primary" href="/download_csv">Download CSV</a>
-      <a class="btn btn-outline-secondary" href="/">Back</a>
+  <div class="container my-4">
+    <!-- Header -->
+    <div class="row mb-4">
+      <div class="col-12">
+        <div class="card glass-card">
+          <div class="card-body">
+            <div class="d-flex justify-content-between align-items-center flex-wrap gap-3">
+              <div>
+                <h4 class="mb-1">
+                  <i class="fas fa-clipboard-list me-2"></i>Attendance Records
+                </h4>
+                <p class="text-muted small mb-0">View and manage attendance history</p>
+              </div>
+              <div class="d-flex gap-2 flex-wrap">
+                <a class="btn btn-info" href="/attendance_audit_log">
+                  <i class="fas fa-history me-2"></i>Audit Log
+                </a>
+                <a class="btn btn-success" href="/download_csv?period={{ period }}&subject={{ subject_filter }}&search={{ search_query }}&start_date={{ start_date }}&end_date={{ end_date }}">
+                  <i class="fas fa-download me-2"></i>Download CSV
+                </a>
+                <a class="btn btn-outline-secondary" href="/">
+                  <i class="fas fa-arrow-left me-2"></i>Dashboard
+                </a>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Teacher Controls Info -->
+    <div class="row mb-4">
+      <div class="col-12">
+        <div class="alert alert-warning d-flex align-items-start">
+          <i class="fas fa-user-shield me-3 fs-5"></i>
+          <div>
+            <strong>Teacher Controls:</strong> You can unmark attendance for students who left early or were marked incorrectly. All actions are logged for audit purposes.
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Filter Buttons -->
+    <div class="row mb-4">
+      <div class="col-12">
+        <div class="card glass-card">
+          <div class="card-body">
+            <div class="row g-3">
+              <!-- Search Box -->
+              <div class="col-md-12 mb-3">
+                <form method="GET" action="/attendance_record" class="d-flex gap-2">
+                  <input type="hidden" name="period" value="{{ period }}">
+                  <input type="hidden" name="subject" value="{{ subject_filter }}">
+                  <input type="text" 
+                         name="search" 
+                         class="form-control" 
+                         placeholder="🔍 Search by student name or ID..." 
+                         value="{{ search_query }}">
+                  <button type="submit" class="btn btn-primary">
+                    <i class="fas fa-search me-1"></i>Search
+                  </button>
+                  {% if search_query %}
+                  <a href="/attendance_record?period={{ period }}&subject={{ subject_filter }}" 
+                     class="btn btn-secondary">
+                    <i class="fas fa-times me-1"></i>Clear
+                  </a>
+                  {% endif %}
+                </form>
+              </div>
+              
+              <!-- Date Range Picker -->
+              <div class="col-md-12 mb-3">
+                <form method="GET" action="/attendance_record" id="dateRangeForm">
+                  <input type="hidden" name="period" value="custom">
+                  <input type="hidden" name="subject" value="{{ subject_filter }}">
+                  <input type="hidden" name="search" value="{{ search_query }}">
+                  <div class="row g-2">
+                    <div class="col-md-4">
+                      <label class="form-label small fw-semibold">
+                        <i class="fas fa-calendar-alt me-1"></i>From Date
+                      </label>
+                      <input type="date" 
+                             name="start_date" 
+                             id="startDate"
+                             class="form-control" 
+                             value="{{ start_date }}">
+                    </div>
+                    <div class="col-md-4">
+                      <label class="form-label small fw-semibold">
+                        <i class="fas fa-calendar-alt me-1"></i>To Date
+                      </label>
+                      <input type="date" 
+                             name="end_date" 
+                             id="endDate"
+                             class="form-control" 
+                             value="{{ end_date }}">
+                    </div>
+                    <div class="col-md-4 d-flex align-items-end">
+                      <button type="submit" class="btn btn-primary w-100">
+                        <i class="fas fa-filter me-1"></i>Apply Date Filter
+                      </button>
+                    </div>
+                  </div>
+                </form>
+              </div>
+              
+              <div class="col-md-6">
+                <h6 class="mb-3">
+                  <i class="fas fa-filter me-2"></i>Quick Filters
+                </h6>
+                <div class="d-flex gap-2 flex-wrap">
+                  <a href="/attendance_record?period=all&subject={{ subject_filter }}&search={{ search_query }}" 
+                     class="btn {% if period == 'all' %}btn-primary{% else %}btn-outline-primary{% endif %} btn-sm">
+                    <i class="fas fa-calendar me-1"></i>All Time
+                  </a>
+                  <a href="/attendance_record?period=daily&subject={{ subject_filter }}&search={{ search_query }}" 
+                     class="btn {% if period == 'daily' %}btn-primary{% else %}btn-outline-primary{% endif %} btn-sm">
+                    <i class="fas fa-calendar-day me-1"></i>Today
+                  </a>
+                  <a href="/attendance_record?period=weekly&subject={{ subject_filter }}&search={{ search_query }}" 
+                     class="btn {% if period == 'weekly' %}btn-primary{% else %}btn-outline-primary{% endif %} btn-sm">
+                    <i class="fas fa-calendar-week me-1"></i>This Week
+                  </a>
+                  <a href="/attendance_record?period=monthly&subject={{ subject_filter }}&search={{ search_query }}" 
+                     class="btn {% if period == 'monthly' %}btn-primary{% else %}btn-outline-primary{% endif %} btn-sm">
+                    <i class="fas fa-calendar-alt me-1"></i>This Month
+                  </a>
+                  {% if start_date and end_date %}
+                  <a href="/attendance_record?period=all&subject={{ subject_filter }}&search={{ search_query }}" 
+                     class="btn btn-outline-danger btn-sm">
+                    <i class="fas fa-times me-1"></i>Clear Date Filter
+                  </a>
+                  {% endif %}
+                </div>
+              </div>
+              <div class="col-md-6">
+                <h6 class="mb-3">
+                  <i class="fas fa-book me-2"></i>Filter by Subject
+                </h6>
+                {% if subjects %}
+                <select class="form-select form-select-sm" id="subjectFilter" onchange="filterBySubject()">
+                  <option value="all" {% if subject_filter == 'all' %}selected{% endif %}>All Subjects</option>
+                  {% for subj in subjects %}
+                  <option value="{{ subj[0] }}" {% if subject_filter == subj[0]|string %}selected{% endif %}>
+                    {{ subj[1] }} - {{ subj[2] }}
+                  </option>
+                  {% endfor %}
+                </select>
+                {% else %}
+                <div class="alert alert-info mb-0 py-2">
+                  <i class="fas fa-info-circle me-2"></i>
+                  Subject filtering not available. Run migration to enable.
+                </div>
+                {% endif %}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Attendance Summary -->
+    {% if summary %}
+    <div class="row mb-4">
+      <div class="col-12">
+        <div class="card glass-card">
+          <div class="card-body">
+            <h5 class="mb-3">
+              <i class="fas fa-chart-pie me-2"></i>Attendance Summary
+            </h5>
+            <div class="row g-3">
+              <div class="col-md-3">
+                <div class="text-center p-3 bg-light rounded">
+                  <div class="fs-2 fw-bold text-primary">{{ summary.total_students }}</div>
+                  <div class="text-muted small">Total Students</div>
+                </div>
+              </div>
+              <div class="col-md-3">
+                <div class="text-center p-3 bg-light rounded">
+                  <div class="fs-2 fw-bold text-success">{{ summary.present_count }}</div>
+                  <div class="text-muted small">Present</div>
+                </div>
+              </div>
+              <div class="col-md-3">
+                <div class="text-center p-3 bg-light rounded">
+                  <div class="fs-2 fw-bold text-danger">{{ summary.absent_count }}</div>
+                  <div class="text-muted small">Absent</div>
+                </div>
+              </div>
+              <div class="col-md-3">
+                <div class="text-center p-3 bg-light rounded">
+                  <div class="fs-2 fw-bold text-info">{{ summary.percentage }}%</div>
+                  <div class="text-muted small">Attendance Rate</div>
+                </div>
+              </div>
+            </div>
+            
+            <!-- Absent Students List (for daily view) -->
+            {% if summary.absent_students and summary.absent_students|length > 0 %}
+            <div class="mt-3">
+              <h6 class="text-danger">
+                <i class="fas fa-user-times me-2"></i>Absent Students ({{ summary.absent_students|length }})
+              </h6>
+              <div class="alert alert-danger">
+                <div class="row">
+                  {% for student in summary.absent_students %}
+                  <div class="col-md-4 mb-2">
+                    <i class="fas fa-times-circle me-1"></i>
+                    <strong>{{ student[1] }}</strong>
+                    {% if student[2] %}(Roll: {{ student[2] }}){% endif %}
+                  </div>
+                  {% endfor %}
+                </div>
+              </div>
+            </div>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+    </div>
+    {% endif %}
+
+    <!-- Records Table -->
+    <div class="row">
+      <div class="col-12">
+        <div class="card glass-card">
+          <div class="card-body">
+            <div class="d-flex justify-content-between align-items-center mb-3">
+              <h5 class="mb-0">
+                <i class="fas fa-list me-2"></i>Attendance Records
+              </h5>
+              <span class="badge bg-info">
+                Showing {{ records|length }} of {{ total_records }} records
+              </span>
+            </div>
+            <div class="table-responsive">
+              <table class="table table-hover align-middle mb-0" id="attendanceTable">
+                <thead>
+                  <tr>
+                    <th><i class="fas fa-hashtag me-1"></i>ID</th>
+                    <th><i class="fas fa-user me-1"></i>Student ID</th>
+                    <th><i class="fas fa-id-card me-1"></i>Name</th>
+                    <th><i class="fas fa-book me-1"></i>Subject</th>
+                    <th><i class="fas fa-clock me-1"></i>Period</th>
+                    <th><i class="fas fa-calendar me-1"></i>Date & Time</th>
+                    <th class="text-center"><i class="fas fa-cog me-1"></i>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                {% if records|length > 0 %}
+                  {% for r in records %}
+                  <tr id="row-{{ r[0] }}">
+                    <td><span class="badge bg-primary">{{ r[0] }}</span></td>
+                    <td>{{ r[1] }}</td>
+                    <td><strong>{{ r[2] }}</strong></td>
+                    <td>
+                      {% if r[4] %}
+                        <span class="badge bg-info">{{ r[4] }}</span>
+                        <br><small class="text-muted">{{ r[5] }}</small>
+                      {% else %}
+                        <span class="badge bg-secondary">No Subject</span>
+                      {% endif %}
+                    </td>
+                    <td>
+                      {% if r[6] %}
+                        <span class="badge bg-success" style="font-size: 0.9rem; padding: 0.4rem 0.8rem;">
+                          <i class="fas fa-clock me-1"></i>Period {{ r[6] }}
+                        </span>
+                      {% else %}
+                        <span class="text-muted">-</span>
+                      {% endif %}
+                    </td>
+                    <td>
+                      <div>
+                        <i class="far fa-calendar-alt me-1"></i>
+                        <strong>{{ r[3]|human_datetime }}</strong>
+                      </div>
+                    </td>
+                    <td class="text-center">
+                      <button class="btn btn-sm btn-danger" onclick="unmarkAttendance({{ r[0] }}, '{{ r[2] }}')">
+                        <i class="fas fa-times me-1"></i>Unmark
+                      </button>
+                    </td>
+                  </tr>
+                  {% endfor %}
+                {% else %}
+                  <tr>
+                    <td colspan="7" class="text-center py-4">
+                      <i class="fas fa-inbox fs-1 text-muted mb-2"></i>
+                      <p class="text-muted mb-0">No attendance records found</p>
+                      {% if search_query %}
+                      <small class="text-muted">Try a different search term</small>
+                      {% endif %}
+                    </td>
+                  </tr>
+                {% endif %}
+                </tbody>
+              </table>
+            </div>
+            
+            <!-- Pagination -->
+            {% if total_pages > 1 %}
+            <div class="mt-4">
+              <nav>
+                <ul class="pagination justify-content-center">
+                  <!-- Previous Button -->
+                  <li class="page-item {% if page <= 1 %}disabled{% endif %}">
+                    <a class="page-link" href="/attendance_record?period={{ period }}&subject={{ subject_filter }}&search={{ search_query }}&start_date={{ start_date }}&end_date={{ end_date }}&page={{ page - 1 }}">
+                      <i class="fas fa-chevron-left"></i> Previous
+                    </a>
+                  </li>
+                  
+                  <!-- Page Numbers -->
+                  {% for p in range(1, total_pages + 1) %}
+                    {% if p == 1 or p == total_pages or (p >= page - 2 and p <= page + 2) %}
+                      <li class="page-item {% if p == page %}active{% endif %}">
+                        <a class="page-link" href="/attendance_record?period={{ period }}&subject={{ subject_filter }}&search={{ search_query }}&start_date={{ start_date }}&end_date={{ end_date }}&page={{ p }}">
+                          {{ p }}
+                        </a>
+                      </li>
+                    {% elif p == page - 3 or p == page + 3 %}
+                      <li class="page-item disabled">
+                        <span class="page-link">...</span>
+                      </li>
+                    {% endif %}
+                  {% endfor %}
+                  
+                  <!-- Next Button -->
+                  <li class="page-item {% if page >= total_pages %}disabled{% endif %}">
+                    <a class="page-link" href="/attendance_record?period={{ period }}&subject={{ subject_filter }}&search={{ search_query }}&start_date={{ start_date }}&end_date={{ end_date }}&page={{ page + 1 }}">
+                      Next <i class="fas fa-chevron-right"></i>
+                    </a>
+                  </li>
+                </ul>
+              </nav>
+              <p class="text-center text-muted small">
+                Page {{ page }} of {{ total_pages }} ({{ total_records }} total records)
+              </p>
+            </div>
+            {% endif %}
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 
-  <div class="mb-3">
-    <a href="/attendance_record?period=all" class="btn btn-sm btn-light">All</a>
-    <a href="/attendance_record?period=daily" class="btn btn-sm btn-light">Daily</a>
-    <a href="/attendance_record?period=weekly" class="btn btn-sm btn-light">Weekly</a>
-    <a href="/attendance_record?period=monthly" class="btn btn-sm btn-light">Monthly</a>
+  <!-- Confirmation Modal -->
+  <div class="modal fade" id="confirmModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered">
+      <div class="modal-content" style="border-radius: 20px; overflow: hidden;">
+        <div class="modal-header" style="background: linear-gradient(135deg, #f59e0b, #d97706); color: white;">
+          <h5 class="modal-title">
+            <i class="fas fa-exclamation-triangle me-2"></i>Confirm Unmark Attendance
+          </h5>
+          <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body p-4">
+          <p class="mb-3">Are you sure you want to unmark attendance for <strong id="studentName" class="text-primary"></strong>?</p>
+          
+          <div class="alert alert-info d-flex align-items-start">
+            <i class="fas fa-info-circle me-2 mt-1"></i>
+            <small>This action will be logged with timestamp and can be reviewed in audit logs.</small>
+          </div>
+          
+          <div class="mb-0">
+            <label for="reasonInput" class="form-label fw-semibold">Reason (optional):</label>
+            <input type="text" class="form-control" id="reasonInput" placeholder="e.g., Student left early">
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">
+            <i class="fas fa-times me-1"></i>Cancel
+          </button>
+          <button type="button" class="btn btn-danger" id="confirmUnmarkBtn">
+            <i class="fas fa-check me-1"></i>Confirm Unmark
+          </button>
+        </div>
+      </div>
+    </div>
   </div>
 
-  <div class="table-responsive">
-    <table class="table table-striped">
-      <thead class="table-dark">
-        <tr><th>ID</th><th>Student ID</th><th>Name</th><th>Timestamp (UTC)</th></tr>
-      </thead>
-      <tbody>
-      {% for r in records %}
-        <tr><td>{{ r[0] }}</td><td>{{ r[1] }}</td><td>{{ r[2] }}</td><td>{{ r[3] }}</td></tr>
-      {% endfor %}
-      </tbody>
-    </table>
+  <!-- Toast Notification -->
+  <div class="position-fixed bottom-0 end-0 p-3" style="z-index: 11">
+    <div id="successToast" class="toast" role="alert">
+      <div class="toast-header" style="background: linear-gradient(135deg, #10b981, #059669); color: white;">
+        <i class="fas fa-check-circle me-2"></i>
+        <strong class="me-auto">Success</strong>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="toast"></button>
+      </div>
+      <div class="toast-body" id="toastMessage">
+        Attendance unmarked successfully!
+      </div>
+    </div>
   </div>
-</div>
+
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.1/dist/js/bootstrap.bundle.min.js"></script>
+  <script>
+    let currentAttendanceId = null;
+    let currentStudentName = null;
+
+    function filterBySubject() {
+      const subjectId = document.getElementById('subjectFilter').value;
+      const currentPeriod = '{{ period|safe }}';
+      const searchQuery = '{{ search_query|safe }}';
+      const startDate = '{{ start_date|safe }}';
+      const endDate = '{{ end_date|safe }}';
+      window.location.href = '/attendance_record?period=' + currentPeriod + '&subject=' + subjectId + '&search=' + searchQuery + '&start_date=' + startDate + '&end_date=' + endDate;
+    }
+
+    function unmarkAttendance(attendanceId, studentName) {
+      currentAttendanceId = attendanceId;
+      currentStudentName = studentName;
+      
+      document.getElementById('studentName').textContent = studentName;
+      document.getElementById('reasonInput').value = '';
+      
+      const modal = new bootstrap.Modal(document.getElementById('confirmModal'));
+      modal.show();
+    }
+
+    document.getElementById('confirmUnmarkBtn').addEventListener('click', async function() {
+      const reason = document.getElementById('reasonInput').value.trim();
+      
+      try {
+        const response = await fetch('/attendance/' + currentAttendanceId + '/unmark', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ reason: reason })
+        });
+
+        const data = await response.json();
+
+        if (data.success) {
+          const modal = bootstrap.Modal.getInstance(document.getElementById('confirmModal'));
+          modal.hide();
+
+          const row = document.getElementById('row-' + currentAttendanceId);
+          row.classList.add('deleted-row');
+          
+          const btn = row.querySelector('button');
+          btn.disabled = true;
+          btn.innerHTML = '<i class="fas fa-check me-1"></i>Unmarked';
+          btn.classList.remove('btn-danger');
+          btn.classList.add('btn-secondary');
+
+          document.getElementById('toastMessage').textContent = 'Attendance unmarked for ' + currentStudentName;
+          const toast = new bootstrap.Toast(document.getElementById('successToast'));
+          toast.show();
+
+          setTimeout(function() {
+            row.style.transition = 'opacity 0.5s';
+            row.style.opacity = '0';
+            setTimeout(function() { row.remove(); }, 500);
+          }, 2000);
+        } else {
+          alert('Error: ' + (data.error || 'Failed to unmark attendance'));
+        }
+      } catch (error) {
+        console.error('Error:', error);
+        alert('Failed to unmark attendance. Please try again.');
+      }
+    });
+  </script>
 </body>
 </html>

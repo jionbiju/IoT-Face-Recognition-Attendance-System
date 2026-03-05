@@ -1,0 +1,105 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Attendance Audit Log</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.1/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+  <style>
+    .audit-header {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      padding: 20px;
+      border-radius: 8px;
+      margin-bottom: 20px;
+    }
+    .action-badge {
+      padding: 4px 12px;
+      border-radius: 12px;
+      font-size: 0.85rem;
+      font-weight: 500;
+    }
+    .action-unmark {
+      background-color: #dc3545;
+      color: white;
+    }
+  </style>
+</head>
+<body>
+<div class="container my-4">
+  <div class="audit-header">
+    <div class="d-flex justify-content-between align-items-center">
+      <div>
+        <h4 class="mb-1"><i class="fas fa-clipboard-list me-2"></i>Attendance Audit Log</h4>
+        <p class="mb-0 small">Track all attendance modifications for accountability</p>
+      </div>
+      <a href="/attendance_record" class="btn btn-light">
+        <i class="fas fa-arrow-left me-1"></i>Back to Records
+      </a>
+    </div>
+  </div>
+
+  <div class="card shadow-sm">
+    <div class="card-body">
+      {% if logs %}
+        <div class="table-responsive">
+          <table class="table table-hover">
+            <thead class="table-light">
+              <tr>
+                <th>Log ID</th>
+                <th>Attendance ID</th>
+                <th>Student ID</th>
+                <th>Student Name</th>
+                <th>Action</th>
+                <th>Reason</th>
+                <th>Timestamp</th>
+              </tr>
+            </thead>
+            <tbody>
+            {% for log in logs %}
+              <tr>
+                <td>{{ log[0] }}</td>
+                <td>{{ log[1] }}</td>
+                <td>{{ log[2] }}</td>
+                <td><strong>{{ log[3] }}</strong></td>
+                <td>
+                  <span class="action-badge action-unmark">
+                    <i class="fas fa-times me-1"></i>{{ log[4] }}
+                  </span>
+                </td>
+                <td>
+                  {% if log[5] %}
+                    <i class="fas fa-comment-dots me-1 text-muted"></i>{{ log[5] }}
+                  {% else %}
+                    <span class="text-muted">No reason provided</span>
+                  {% endif %}
+                </td>
+                <td>
+                  <small class="text-muted">
+                    <i class="far fa-clock me-1"></i>{{ log[6] }}
+                  </small>
+                </td>
+              </tr>
+            {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% else %}
+        <div class="text-center py-5">
+          <i class="fas fa-inbox fa-3x text-muted mb-3"></i>
+          <h5 class="text-muted">No Audit Logs Yet</h5>
+          <p class="text-muted">Unmark actions will appear here for tracking and accountability.</p>
+        </div>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="alert alert-info mt-3">
+    <i class="fas fa-info-circle me-2"></i>
+    <strong>About Audit Logs:</strong> This log tracks all attendance modifications including who was unmarked, when, and why. 
+    This ensures accountability and helps maintain accurate attendance records.
+  </div>
+</div>
+</body>
+</html>
