@@ -3,11 +3,19 @@ import io
 import threading
 import sqlite3
 import datetime
+from datetime import timezone, timedelta
 import json
 import cv2
 import numpy as np
 from flask import Flask, render_template, request, jsonify, send_file, abort
-from face_model import train_model_background, extract_embedding_for_image, MODEL_PATH
+from facenet_model import train_model_background, extract_embedding_for_image, MODEL_PATH
+
+# Indian Standard Time (IST) timezone
+IST = timezone(timedelta(hours=5, minutes=30))
+
+def get_ist_now():
+    """Get current time in IST"""
+    return datetime.datetime.now(IST)
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(APP_DIR, "attendance.db")
@@ -45,6 +53,19 @@ def human_datetime_filter(timestamp_str):
         
         # Combine
         return f"{date_part} at {time_part}"
+    except:
+        # Fallback to original if parsing fails
+        return timestamp_str
+
+@app.template_filter('exact_datetime')
+def exact_datetime_filter(timestamp_str):
+    """Convert ISO timestamp to exact date and time format"""
+    try:
+        # Parse the ISO format timestamp
+        dt = datetime.datetime.fromisoformat(timestamp_str)
+        
+        # Format: March 06, 2026 01:30:45 PM
+        return dt.strftime("%B %d, %Y %I:%M:%S %p")
     except:
         # Fallback to original if parsing fails
         return timestamp_str
@@ -155,12 +176,19 @@ init_db()
 
 # Auto-train on startup if dataset exists
 def auto_train_on_startup():
-    """Automatically train the model when the app starts"""
-    from face_model import auto_train_from_dataset
-    if os.path.exists(DATASET_DIR) and os.listdir(DATASET_DIR):
-        print("Auto-training face recognition model on startup...")
-        auto_train_from_dataset(DATASET_DIR)
-        print("Startup auto-training complete!")
+    """Automatically train the model when the app starts (only if model doesn't exist)"""
+    from facenet_model import auto_train_from_dataset
+    
+    # Only auto-train if model file doesn't exist
+    if not os.path.exists(MODEL_PATH):
+        if os.path.exists(DATASET_DIR) and os.listdir(DATASET_DIR):
+            print("⚠️  No trained model found. Auto-training from dataset...")
+            auto_train_from_dataset(DATASET_DIR)
+            print("✓ Startup auto-training complete!")
+        else:
+            print("⚠️  No trained model and no dataset found. Please register students.")
+    else:
+        print("✓ Trained model found. Skipping auto-training.")
 
 # Run auto-training in background thread
 startup_thread = threading.Thread(target=auto_train_on_startup)
@@ -193,19 +221,41 @@ def manage_students():
 # Dashboard simple API for attendance stats (last 30 days)
 @app.route("/attendance_stats")
 def attendance_stats():
-    import pandas as pd
-    conn = sqlite3.connect(DB_PATH)
-    df = pd.read_sql_query("SELECT timestamp FROM attendance", conn)
-    conn.close()
-    if df.empty:
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        
+        # Get attendance for last 30 days (only non-deleted records)
+        c.execute("""
+            SELECT DATE(timestamp) as date, COUNT(*) as count
+            FROM attendance
+            WHERE deleted = 0
+            AND DATE(timestamp) >= DATE('now', '-30 days')
+            GROUP BY DATE(timestamp)
+            ORDER BY date
+        """)
+        
+        results = c.fetchall()
+        conn.close()
+        
+        # Create dict of date -> count
+        attendance_dict = {row[0]: row[1] for row in results}
+        
+        # Generate last 30 days
         from datetime import date, timedelta
-        days = [(date.today() - datetime.timedelta(days=i)).strftime("%d-%b") for i in range(29, -1, -1)]
+        last_30 = [(date.today() - timedelta(days=i)) for i in range(29, -1, -1)]
+        
+        dates = [d.strftime("%d-%b") for d in last_30]
+        counts = [attendance_dict.get(d.strftime("%Y-%m-%d"), 0) for d in last_30]
+        
+        return jsonify({"dates": dates, "counts": counts})
+        
+    except Exception as e:
+        print(f"Error in attendance_stats: {e}")
+        # Return empty data on error
+        from datetime import date, timedelta
+        days = [(date.today() - timedelta(days=i)).strftime("%d-%b") for i in range(29, -1, -1)]
         return jsonify({"dates": days, "counts": [0]*30})
-    df['date'] = pd.to_datetime(df['timestamp']).dt.date
-    last_30 = [ (datetime.date.today() - datetime.timedelta(days=i)) for i in range(29, -1, -1) ]
-    counts = [ int(df[df['date'] == d].shape[0]) for d in last_30 ]
-    dates = [ d.strftime("%d-%b") for d in last_30 ]
-    return jsonify({"dates": dates, "counts": counts})
 
 # -------- Add student (form) --------
 @app.route("/add_student", methods=["GET", "POST"])
@@ -230,7 +280,7 @@ def add_student():
     max_id = c.fetchone()[0]
     next_id = (max_id + 1) if max_id else 1
     
-    now = datetime.datetime.utcnow().isoformat()
+    now = get_ist_now().isoformat()
     c.execute("INSERT INTO students (id, name, roll, class, section, reg_no, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
               (next_id, name, roll, cls, sec, reg_no, now))
     
@@ -275,13 +325,13 @@ def upload_face():
     conn.close()
     
     # Import face recognition functions
-    from face_model import face_recognizer
+    from facenet_model import face_recognizer
     
     encodings_added = 0
     
     for f in files:
         try:
-            fname = f"{datetime.datetime.utcnow().timestamp():.6f}_{saved}.jpg"
+            fname = f"{get_ist_now().timestamp():.6f}_{saved}.jpg"
             path = os.path.join(folder, fname)
             f.save(path)
             
@@ -365,10 +415,10 @@ def recognize_face():
         name = row[0] if row else "Unknown"
 
          # save attendance record with timestamp
-        ts = datetime.datetime.utcnow().isoformat()
+        ts = get_ist_now().isoformat()
 
         # check last attendance within 1 min
-        last_time = datetime.datetime.utcnow() - datetime.timedelta(minutes=1)
+        last_time = get_ist_now() - datetime.timedelta(minutes=1)
 
         c.execute("SELECT timestamp FROM attendance WHERE student_id=? ORDER BY id DESC LIMIT 1", (int(pred_label),))
         row = c.fetchone()
@@ -426,7 +476,7 @@ def recognize_face():
         
         # Perform liveness detection FIRST
         from liveness_detection import liveness_detector
-        from face_model import face_recognizer
+        from facenet_model import face_recognizer
         
         # Detect face for liveness check
         faces = face_recognizer.detect_faces(image)
@@ -458,7 +508,7 @@ def recognize_face():
             return jsonify({"recognized": False, "error": "no face detected"}), 200
         
         # Load model and predict
-        from face_model import load_model_if_exists, predict_with_model, add_face_to_database
+        from facenet_model import load_model_if_exists, predict_with_model, add_face_to_database
         face_database = load_model_if_exists()
         if not face_database:
             return jsonify({"recognized": False, "error": "model not trained"}), 200
@@ -487,7 +537,7 @@ def recognize_face():
         # --- DUPLICATE PREVENTION LOGIC ---
         # Only check non-deleted records (unmarked records are ignored)
         # Calculate the cutoff time (current time minus 1 hour)
-        current_time = datetime.datetime.utcnow()
+        current_time = get_ist_now()
         one_hour_ago = current_time - datetime.timedelta(hours=1)
 
         # Check for the most recent NON-DELETED entry for this student
@@ -880,7 +930,7 @@ def unmark_attendance(attendance_id):
         student_id, student_name, timestamp = record
         
         # Soft delete the attendance record
-        unmark_time = datetime.datetime.utcnow().isoformat()
+        unmark_time = get_ist_now().isoformat()
         c.execute("""UPDATE attendance 
                      SET deleted = 1, 
                          deleted_at = ?,
@@ -1330,8 +1380,11 @@ def delete_student(sid):
         # Delete all attendance records (including deleted ones)
         c.execute("DELETE FROM attendance WHERE student_id=?", (sid,))
         
+        # Delete student enrollments
+        c.execute("DELETE FROM student_subjects WHERE student_id=?", (sid,))
+        
         # Log the deletion in audit log
-        deletion_time = datetime.datetime.utcnow().isoformat()
+        deletion_time = get_ist_now().isoformat()
         c.execute("""INSERT INTO attendance_audit_log 
                      (attendance_id, student_id, student_name, action, reason, timestamp)
                      VALUES (?, ?, ?, ?, ?, ?)""",
@@ -1354,7 +1407,7 @@ def delete_student(sid):
         
         # Remove face encodings from recognition model
         try:
-            from face_model import face_recognizer
+            from facenet_model import face_recognizer
             if sid in face_recognizer.face_database:
                 encodings_count = len(face_recognizer.face_database[sid])
                 del face_recognizer.face_database[sid]
@@ -1370,17 +1423,9 @@ def delete_student(sid):
         # REMOVED: Auto-reorganize IDs after deletion - this was causing database corruption
         # reorganize_student_ids()  # DANGEROUS - DO NOT USE
         
-        # CRITICAL: Retrain face recognition model after deletion
-        try:
-            app.logger.info("Retraining face recognition model after student deletion...")
-            from face_model import train_model_from_dataset
-            train_success = train_model_from_dataset()
-            if train_success:
-                app.logger.info("Face recognition model retrained successfully")
-            else:
-                app.logger.warning("Face recognition model retraining failed - manual retraining may be needed")
-        except Exception as e:
-            app.logger.error(f"Error retraining model after deletion: {e}")
+        # REMOVED: Auto-retrain after deletion - this was causing errors
+        # The face recognition model will auto-train on next startup
+        # Manual retraining can be done from the training page if needed
         
         app.logger.info(f"Student deleted: ID={sid}, Name={student_name}, Images={images_deleted}, Attendance={attendance_count}")
         
@@ -1829,7 +1874,7 @@ def enroll_student_in_subject(student_id):
         conn = get_db_connection()
         c = conn.cursor()
         
-        now = datetime.datetime.utcnow().isoformat()
+        now = get_ist_now().isoformat()
         try:
             c.execute("""INSERT INTO student_subjects (student_id, subject_id, enrolled_at)
                         VALUES (?, ?, ?)""",

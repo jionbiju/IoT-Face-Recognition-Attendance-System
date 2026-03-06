@@ -80,16 +80,16 @@ class AdvancedFaceRecognizer:
             self.use_dnn_detector = False
     
     def setup_face_recognition_model(self):
-        """Setup MobileNet-based face recognition model"""
+        """Setup MobileNetV2 for face recognition (pre-trained on ImageNet)"""
         try:
-            # Create a lightweight face recognition model
+            # Use MobileNetV2 with ImageNet pre-training
+            # Even though trained on objects, transfer learning works well for faces
             input_shape = (160, 160, 3)
             
-            # Use MobileNetV2 as backbone
             base_model = MobileNetV2(
                 input_shape=input_shape,
                 include_top=False,
-                weights='imagenet',
+                weights='imagenet',  # Pre-trained weights are crucial
                 pooling='avg'
             )
             
@@ -99,24 +99,26 @@ class AdvancedFaceRecognizer:
             x = Lambda(lambda x: tf.nn.l2_normalize(x, axis=1), name='l2_normalize')(x)
             
             self.face_model = Model(inputs=base_model.input, outputs=x)
+            self.input_size = (160, 160)
             
-            # Freeze base model layers for faster training
+            # Freeze base model layers
             for layer in base_model.layers:
                 layer.trainable = False
             
-            print("✓ MobileNet Face Recognition Model loaded")
+            print("✓ MobileNetV2 Face Recognition Model loaded (ImageNet pre-trained)")
             
         except Exception as e:
-            print(f"Error loading face model: {e}")
-            # Fallback to simple CNN
+            print(f"Error loading MobileNetV2: {e}")
             self.setup_simple_cnn_model()
     
     def setup_simple_cnn_model(self):
         """Fallback simple CNN model"""
         from tensorflow.keras.layers import Conv2D, MaxPooling2D, Flatten, Dropout
         
+        input_size = (160, 160, 3)
+        
         model = tf.keras.Sequential([
-            Conv2D(32, (3, 3), activation='relu', input_shape=(160, 160, 3)),
+            Conv2D(32, (3, 3), activation='relu', input_shape=input_size),
             MaxPooling2D(2, 2),
             Conv2D(64, (3, 3), activation='relu'),
             MaxPooling2D(2, 2),
@@ -130,6 +132,7 @@ class AdvancedFaceRecognizer:
         ])
         
         self.face_model = model
+        self.input_size = (160, 160)
         print("✓ Simple CNN Face Model loaded")
     
     def detect_faces(self, image):
@@ -193,10 +196,11 @@ class AdvancedFaceRecognizer:
         if face.size == 0:
             return None
         
-        # Resize to model input size
-        face = cv2.resize(face, (160, 160))
+        # Resize to model input size (112x112 for MobileFaceNet, 160x160 for fallback)
+        target_size = getattr(self, 'input_size', (112, 112))
+        face = cv2.resize(face, target_size)
         
-        # Normalize
+        # Normalize to [0, 1]
         face = face.astype(np.float32) / 255.0
         
         # Ensure RGB format
@@ -325,14 +329,13 @@ class AdvancedFaceRecognizer:
                 print(f"Auto-training error for student {student_id}: {e}")
     
     def predict_face(self, encoding):
-        """Predict student ID from face encoding"""
+        """Predict student ID from face encoding with improved discrimination"""
         if encoding is None or not self.face_database:
             return None, 0.0, False
         
-        best_similarity = 0.0
-        best_student_id = None
+        # Calculate similarities with all students
+        student_scores = {}
         
-        # Compare with all students
         for student_id, stored_encodings in self.face_database.items():
             if not stored_encodings:
                 continue
@@ -343,22 +346,55 @@ class AdvancedFaceRecognizer:
                 similarity = cosine_similarity([encoding], [stored_encoding])[0][0]
                 similarities.append(similarity)
             
-            # Use the best similarity for this student
-            max_similarity = max(similarities)
+            # Use multiple metrics for better discrimination
+            max_sim = max(similarities)
+            avg_sim = np.mean(similarities)
+            top3_avg = np.mean(sorted(similarities, reverse=True)[:min(3, len(similarities))])
             
-            if max_similarity > best_similarity:
-                best_similarity = max_similarity
-                best_student_id = student_id
+            # Weighted score: prioritize max but consider average
+            score = 0.6 * max_sim + 0.3 * top3_avg + 0.1 * avg_sim
+            
+            student_scores[student_id] = {
+                'max': max_sim,
+                'avg': avg_sim,
+                'top3': top3_avg,
+                'score': score
+            }
         
-        # Dynamic threshold based on database size
+        # Find best match
+        best_student_id = max(student_scores.keys(), key=lambda k: student_scores[k]['score'])
+        best_score = student_scores[best_student_id]['score']
+        best_max = student_scores[best_student_id]['max']
+        
+        # Calculate second best for discrimination
+        sorted_students = sorted(student_scores.items(), key=lambda x: x[1]['score'], reverse=True)
+        
+        # Dynamic threshold based on discrimination
         if len(self.face_database) == 1:
             threshold = 0.65  # More lenient for single student
+            is_match = best_max >= threshold
         else:
-            threshold = 0.75  # More strict for multiple students
+            # Use adaptive threshold
+            base_threshold = 0.78  # Increased from 0.75
+            
+            # If there's a clear winner (good separation), be more lenient
+            if len(sorted_students) > 1:
+                second_best_score = sorted_students[1][1]['score']
+                separation = best_score - second_best_score
+                
+                # If separation is large (>0.15), we can be more confident
+                if separation > 0.15:
+                    threshold = 0.75
+                elif separation > 0.10:
+                    threshold = 0.77
+                else:
+                    threshold = base_threshold
+            else:
+                threshold = base_threshold
+            
+            is_match = best_max >= threshold
         
-        is_match = best_similarity >= threshold
-        
-        return best_student_id, best_similarity, is_match
+        return best_student_id, best_max, is_match
     
     def train_from_dataset(self, dataset_dir, progress_callback=None):
         """Train from dataset directory with progress tracking"""

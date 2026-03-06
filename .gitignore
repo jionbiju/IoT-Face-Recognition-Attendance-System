@@ -224,12 +224,48 @@ final_delete_verification.py
 add_test_students.py
 check_enrollments_detail.py
 fix_jion_enrollment.py
+test_jion_recognition.py
+test_recognition_fix.py
+test_ultra_secure.py
+test_liveness.py
+test_time_display.py
+test_add_student_now.py
+test_delete_then_add.py
+test_delete_function.py
+test_jion_photo.py
+who_am_i_test.py
 
-# Utility and diagnostic scripts (keep these commented if you want to include them)
+# Diagnostic and utility scripts
 diagnose_system.py
 emergency_fix.py
+emergency_database_check.py
 fix_enrollments.py
-who_am_i_test.py
+clean_orphaned_enrollments.py
+check_students_now.py
+check_jion_encodings.py
+check_jion_enrollment.py
+check_db_schema.py
+diagnose_student_10.py
+optimize_database.py
+verify_jion_ready.py
+improve_recognition.py
+pre_presentation_check.py
+final_system_test.py
+final_system_verification.py
+quick_db_view.py
+view_database.py
+
+# Model and training scripts
+retrain_model_now.py
+retrain_with_facenet.py
+retrain_with_mobilefacenet.py
+mobilefacenet.py
+face_model_new.py.bak
+
+# Liveness detection test files
+test_liveness_on_photo.py
+test_liveness_simple.py
+test_liveness_multiple.py
 
 # Project documentation and summary files
 DROIDCAM_INTEGRATION_SUMMARY.md
@@ -239,14 +275,24 @@ DELETE_FUNCTION_VERIFIED.md
 ENROLLMENT_ISSUE_FIXED.md
 AUTO_ENROLLMENT_IMPLEMENTED.md
 GITHUB_PUSH_SUMMARY.md
+COMPLETE_FIX_APPLIED.md
+TIME_DISPLAY_ENHANCED.md
+JION_RECOGNITION_FIX.md
+MOBILEFACENET_ANALYSIS.md
+FACENET_UPGRADE_COMPLETE.md
+SCALABILITY_60_STUDENTS.md
+PRETRAINED_MOBILEFACENET_GUIDE.md
 *.md.bak
 
 # Database backups
 attendance_backup_*.db
 *.db.backup
+face_encodings_backup.pkl
 
 # Run scripts
 run_app.bat
 retrain_now.bat
+retrain_facenet.bat
+install_facenet.bat
 *.bat
 *.sh

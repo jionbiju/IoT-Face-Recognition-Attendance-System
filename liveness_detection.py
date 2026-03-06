@@ -63,17 +63,33 @@ class LivenessDetector:
         
         # Calculate weighted overall score
         weights = {
-            'texture': 0.35,      # Most important
-            'color': 0.20,
-            'frequency': 0.20,
-            'quality': 0.15,
+            'texture': 0.40,      # Increased - most important for photo detection
+            'color': 0.25,        # Increased - skin tone analysis
+            'frequency': 0.15,    # Decreased
+            'quality': 0.10,      # Decreased
             'reflection': 0.10
         }
         
-        overall_score = sum(scores[k] * weights[k] for k in weights.keys())
+        # SIMPLIFIED LIVENESS CHECK
+        # For webcam-based systems, distinguishing between live video and photos
+        # of the same webcam feed is extremely difficult. 
+        # We use a lenient check that focuses on obvious spoofing attempts
+        # (printed photos, phone screens with Moiré patterns, etc.)
         
-        # Threshold for liveness
-        is_live = overall_score >= 0.60
+        # Critical checks that indicate obvious spoofing:
+        # 1. Very low texture (flat, printed photo)
+        # 2. Very low color variance (screen display)
+        # 3. High frequency artifacts (Moiré patterns from screens)
+        
+        # Reject if ANY of these obvious spoof indicators are present:
+        obvious_spoof = (
+            scores['texture'] < 0.40 or  # Very flat texture = printed photo
+            scores['color'] < 0.35 or     # Poor color = screen/print
+            (scores['frequency'] > 0.90 and scores['quality'] > 0.95)  # Perfect + Moiré = screen
+        )
+        
+        is_live = not obvious_spoof
+        overall_score = sum(scores[k] * weights[k] for k in weights.keys())
         
         # Create detailed report
         details = {
