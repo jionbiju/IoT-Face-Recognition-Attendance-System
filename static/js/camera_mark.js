@@ -99,36 +99,40 @@ async function loadCameraConfig() {
     const devices = await navigator.mediaDevices.enumerateDevices();
     availableDevices = devices.filter(device => device.kind === 'videoinput');
     
-    // Populate camera dropdown with only two main options
+    console.log('Available camera devices:', availableDevices.map((d, i) => ({
+      index: i,
+      label: d.label,
+      deviceId: d.deviceId
+    })));
+    
+    // Populate camera dropdown
     cameraSelect.innerHTML = '';
     
-    // Add Laptop Camera (always Camera 0)
-    const laptopOption = document.createElement('option');
-    laptopOption.value = 0;
-    laptopOption.textContent = '💻 Laptop Camera';
-    cameraSelect.appendChild(laptopOption);
-    
-    // Find and add DroidCam Video option
-    let droidcamFound = false;
-    availableDevices.forEach((device, index) => {
-      const label = device.label || '';
-      if (label.toLowerCase().includes('droidcam video') || 
-          (label.toLowerCase().includes('droidcam') && label.toLowerCase().includes('video'))) {
-        const droidcamOption = document.createElement('option');
-        droidcamOption.value = index;
-        droidcamOption.textContent = '📱 DroidCam Video';
-        cameraSelect.appendChild(droidcamOption);
-        droidcamFound = true;
-      }
-    });
-    
-    // If DroidCam Video not found by name, check Camera 2 (common DroidCam index)
-    if (!droidcamFound && availableDevices.length > 2) {
-      const droidcamOption = document.createElement('option');
-      droidcamOption.value = 2;
-      droidcamOption.textContent = '📱 DroidCam Video';
-      cameraSelect.appendChild(droidcamOption);
+    if (availableDevices.length === 0) {
+      cameraSelect.innerHTML = '<option value="">No cameras found</option>';
+      startMarkBtn.disabled = true;
+      return;
     }
+    
+    // Add all available cameras to dropdown
+    availableDevices.forEach((device, index) => {
+      const option = document.createElement('option');
+      option.value = index;
+      
+      const label = device.label || `Camera ${index}`;
+      
+      // Detect camera type and add appropriate icon
+      if (label.toLowerCase().includes('droidcam')) {
+        option.textContent = `📱 ${label}`;
+      } else if (index === 0 || label.toLowerCase().includes('integrated') || 
+                 label.toLowerCase().includes('webcam') || label.toLowerCase().includes('laptop')) {
+        option.textContent = `💻 ${label}`;
+      } else {
+        option.textContent = `📷 ${label}`;
+      }
+      
+      cameraSelect.appendChild(option);
+    });
     
     // Try to get server camera configuration and select appropriate option
     try {

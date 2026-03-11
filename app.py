@@ -1316,6 +1316,233 @@ def download_csv():
     
     return send_file(mem, as_attachment=True, download_name=filename, mimetype="text/csv")
 
+# -------- Excel Export (College Format - Multiple Sheets) --------
+@app.route("/download_excel", methods=["GET"])
+def download_excel():
+    """
+    Export attendance in college format:
+    - One Excel file with multiple sheets
+    - Each sheet = one subject
+    - Columns = dates
+    - Rows = students
+    - 'A' = Absent, Blank = Present
+    """
+    try:
+        from openpyxl import Workbook
+        from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+        from openpyxl.utils import get_column_letter
+    except ImportError:
+        return jsonify({"error": "openpyxl not installed. Run: pip install openpyxl"}), 500
+    
+    # Get filter parameters
+    start_date = request.args.get("start_date", "")
+    end_date = request.args.get("end_date", "")
+    
+    # If no date range specified, use last 30 days
+    if not start_date or not end_date:
+        end_date = datetime.date.today().isoformat()
+        start_date = (datetime.date.today() - datetime.timedelta(days=30)).isoformat()
+    
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    
+    # Get all subjects
+    c.execute("SELECT id, code, name FROM subjects ORDER BY code")
+    subjects = c.fetchall()
+    
+    if not subjects:
+        conn.close()
+        return jsonify({"error": "No subjects found. Please add subjects first."}), 400
+    
+    # Get all students
+    c.execute("SELECT id, name, roll FROM students ORDER BY name")
+    students = c.fetchall()
+    
+    if not students:
+        conn.close()
+        return jsonify({"error": "No students found."}), 400
+    
+    # Create workbook
+    wb = Workbook()
+    wb.remove(wb.active)  # Remove default sheet
+    
+    # Get all unique dates in the range
+    c.execute("""SELECT DISTINCT date(timestamp) as date 
+                 FROM attendance 
+                 WHERE deleted = 0 
+                 AND date(timestamp) BETWEEN ? AND ?
+                 ORDER BY date""", (start_date, end_date))
+    all_dates = [row[0] for row in c.fetchall()]
+    
+    if not all_dates:
+        conn.close()
+        return jsonify({"error": f"No attendance records found between {start_date} and {end_date}"}), 400
+    
+    # Create one sheet per subject
+    for subject_id, subject_code, subject_name in subjects:
+        # Create sheet with subject code as name
+        sheet_name = subject_code[:31]  # Excel sheet name limit is 31 chars
+        ws = wb.create_sheet(title=sheet_name)
+        
+        # Get attendance for this subject
+        c.execute("""SELECT student_id, date(timestamp) as date
+                     FROM attendance
+                     WHERE deleted = 0
+                     AND subject_id = ?
+                     AND date(timestamp) BETWEEN ? AND ?""",
+                  (subject_id, start_date, end_date))
+        
+        attendance_records = c.fetchall()
+        
+        # Create attendance lookup: {student_id: {date: True}}
+        attendance_map = {}
+        for student_id, date in attendance_records:
+            if student_id not in attendance_map:
+                attendance_map[student_id] = {}
+            attendance_map[student_id][date] = True
+        
+        # --- HEADER SECTION ---
+        # Title row
+        ws.merge_cells('A1:C1')
+        title_cell = ws['A1']
+        title_cell.value = "Attendance Summary"
+        title_cell.font = Font(bold=True, size=14)
+        title_cell.alignment = Alignment(horizontal='center', vertical='center')
+        
+        # Subject info
+        ws.merge_cells('A2:C2')
+        subject_cell = ws['A2']
+        subject_cell.value = f"Subject: {subject_code} - {subject_name}"
+        subject_cell.font = Font(bold=True, size=11)
+        
+        # Date range info
+        ws.merge_cells('A3:C3')
+        date_cell = ws['A3']
+        date_cell.value = f"Period: {start_date} to {end_date}"
+        date_cell.font = Font(size=10)
+        
+        # Empty row
+        ws.append([])
+        
+        # --- DATA TABLE HEADER ---
+        header_row = 5
+        
+        # Column headers
+        ws.cell(row=header_row, column=1, value="Roll No")
+        ws.cell(row=header_row, column=2, value="Student")
+        
+        # Date columns - format as DD/MM
+        date_col_start = 3
+        for idx, date_str in enumerate(all_dates, start=date_col_start):
+            try:
+                date_obj = datetime.datetime.strptime(date_str, "%Y-%m-%d")
+                # Format: DD/MM with period count
+                period_num = idx - date_col_start + 1
+                formatted_date = f"{date_obj.strftime('%d/%m')}"
+                
+                cell = ws.cell(row=header_row, column=idx, value=formatted_date)
+                cell.font = Font(bold=True, size=9)
+                cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
+                
+                # Add period number in second row
+                ws.cell(row=header_row + 1, column=idx, value=period_num)
+                ws.cell(row=header_row + 1, column=idx).font = Font(size=8, italic=True)
+                ws.cell(row=header_row + 1, column=idx).alignment = Alignment(horizontal='center')
+            except:
+                ws.cell(row=header_row, column=idx, value=date_str)
+        
+        # Style header row
+        for col in range(1, len(all_dates) + 3):
+            cell = ws.cell(row=header_row, column=col)
+            cell.font = Font(bold=True, size=10)
+            cell.fill = PatternFill(start_color="D3D3D3", end_color="D3D3D3", fill_type="solid")
+            cell.alignment = Alignment(horizontal='center', vertical='center')
+            cell.border = Border(
+                left=Side(style='thin'),
+                right=Side(style='thin'),
+                top=Side(style='thin'),
+                bottom=Side(style='thin')
+            )
+        
+        # --- DATA ROWS ---
+        data_row_start = header_row + 2
+        
+        for row_idx, (student_id, student_name, roll_no) in enumerate(students, start=data_row_start):
+            # Roll number
+            ws.cell(row=row_idx, column=1, value=roll_no if roll_no else "-")
+            
+            # Student name
+            ws.cell(row=row_idx, column=2, value=student_name)
+            
+            # Attendance for each date
+            for col_idx, date_str in enumerate(all_dates, start=date_col_start):
+                cell = ws.cell(row=row_idx, column=col_idx)
+                
+                # Check if student was present on this date for this subject
+                is_present = (student_id in attendance_map and 
+                             date_str in attendance_map[student_id])
+                
+                if is_present:
+                    # Present = blank cell
+                    cell.value = ""
+                    cell.fill = PatternFill(start_color="FFFFFF", end_color="FFFFFF", fill_type="solid")
+                else:
+                    # Absent = 'A'
+                    cell.value = "A"
+                    cell.font = Font(bold=True, color="FF0000")  # Red color
+                    cell.fill = PatternFill(start_color="FFE6E6", end_color="FFE6E6", fill_type="solid")
+                
+                cell.alignment = Alignment(horizontal='center', vertical='center')
+                cell.border = Border(
+                    left=Side(style='thin'),
+                    right=Side(style='thin'),
+                    top=Side(style='thin'),
+                    bottom=Side(style='thin')
+                )
+            
+            # Style student info columns
+            for col in [1, 2]:
+                cell = ws.cell(row=row_idx, column=col)
+                cell.border = Border(
+                    left=Side(style='thin'),
+                    right=Side(style='thin'),
+                    top=Side(style='thin'),
+                    bottom=Side(style='thin')
+                )
+        
+        # --- COLUMN WIDTHS ---
+        ws.column_dimensions['A'].width = 12  # Roll No
+        ws.column_dimensions['B'].width = 25  # Student Name
+        
+        # Date columns - narrower
+        for col_idx in range(date_col_start, len(all_dates) + date_col_start):
+            ws.column_dimensions[get_column_letter(col_idx)].width = 6
+        
+        # --- COLUMN WIDTHS ---
+        ws.column_dimensions['A'].width = 12  # Roll No
+        ws.column_dimensions['B'].width = 25  # Student Name
+        
+        # Date columns - narrower
+        for col_idx in range(date_col_start, len(all_dates) + date_col_start):
+            ws.column_dimensions[get_column_letter(col_idx)].width = 6
+    
+    conn.close()
+    
+    # Save to BytesIO
+    output = io.BytesIO()
+    wb.save(output)
+    output.seek(0)
+    
+    # Generate filename
+    filename = f"Attendance_Report_{start_date}_to_{end_date}.xlsx"
+    
+    return send_file(
+        output,
+        as_attachment=True,
+        download_name=filename,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+
 # -------- Students API for listing/editing --------
 @app.route("/students", methods=["GET"])
 def students_list():

@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ROC Curve Analysis Results</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 20px;
+            min-height: 100vh;
+        }
+        
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            overflow: hidden;
+        }
+        
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 40px;
+            text-align: center;
+        }
+        
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+        
+        .header p {
+            font-size: 1.2em;
+            opacity: 0.9;
+        }
+        
+        .metrics {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            padding: 40px;
+            background: #f8f9fa;
+        }
+        
+        .metric-card {
+            background: white;
+            padding: 25px;
+            border-radius: 15px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+            text-align: center;
+            transition: transform 0.3s ease;
+        }
+        
+        .metric-card:hover {
+            transform: translateY(-5px);
+        }
+        
+        .metric-value {
+            font-size: 2.5em;
+            font-weight: bold;
+            color: #667eea;
+            margin: 10px 0;
+        }
+        
+        .metric-label {
+            font-size: 1em;
+            color: #666;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        
+        .metric-description {
+            font-size: 0.9em;
+            color: #999;
+            margin-top: 10px;
+        }
+        
+        .excellent {
+            color: #10b981 !important;
+        }
+        
+        .good {
+            color: #3b82f6 !important;
+        }
+        
+        .fair {
+            color: #f59e0b !important;
+        }
+        
+        .images-section {
+            padding: 40px;
+        }
+        
+        .section-title {
+            font-size: 2em;
+            color: #333;
+            margin-bottom: 30px;
+            text-align: center;
+        }
+        
+        .image-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(500px, 1fr));
+            gap: 30px;
+            margin-bottom: 40px;
+        }
+        
+        .image-card {
+            background: white;
+            border-radius: 15px;
+            overflow: hidden;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+            transition: transform 0.3s ease;
+        }
+        
+        .image-card:hover {
+            transform: scale(1.02);
+        }
+        
+        .image-card img {
+            width: 100%;
+            height: auto;
+            display: block;
+        }
+        
+        .image-title {
+            padding: 20px;
+            font-size: 1.3em;
+            font-weight: 600;
+            color: #333;
+            text-align: center;
+            background: #f8f9fa;
+        }
+        
+        .footer {
+            background: #333;
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+        
+        .footer p {
+            margin: 5px 0;
+        }
+        
+        .badge {
+            display: inline-block;
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-size: 0.9em;
+            font-weight: 600;
+            margin-top: 10px;
+        }
+        
+        .badge-excellent {
+            background: #10b981;
+            color: white;
+        }
+        
+        .badge-good {
+            background: #3b82f6;
+            color: white;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🎯 ROC Curve Analysis Results</h1>
+            <p>Face Recognition System Performance Evaluation</p>
+            <span class="badge badge-excellent">FaceNet (VGGFace2)</span>
+        </div>
+        
+        <div class="metrics">
+            <div class="metric-card">
+                <div class="metric-label">AUC Score</div>
+                <div class="metric-value excellent">0.9437</div>
+                <div class="metric-description">Very Good Performance</div>
+                <span class="badge badge-excellent">Excellent</span>
+            </div>
+            
+            <div class="metric-card">
+                <div class="metric-label">Accuracy</div>
+                <div class="metric-value excellent">97.56%</div>
+                <div class="metric-description">Overall Classification Accuracy</div>
+            </div>
+            
+            <div class="metric-card">
+                <div class="metric-label">Equal Error Rate</div>
+                <div class="metric-value excellent">5.63%</div>
+                <div class="metric-description">Lower is Better</div>
+            </div>
+            
+            <div class="metric-card">
+                <div class="metric-label">Optimal Threshold</div>
+                <div class="metric-value good">0.9397</div>
+                <div class="metric-description">Recommended Operating Point</div>
+            </div>
+            
+            <div class="metric-card">
+                <div class="metric-label">True Positive Rate</div>
+                <div class="metric-value excellent">88.8%</div>
+                <div class="metric-description">Genuine User Acceptance</div>
+            </div>
+            
+            <div class="metric-card">
+                <div class="metric-label">False Positive Rate</div>
+                <div class="metric-value excellent">0.0%</div>
+                <div class="metric-description">Impostor Rejection</div>
+            </div>
+        </div>
+        
+        <div class="images-section">
+            <h2 class="section-title">📊 Performance Visualizations</h2>
+            
+            <div class="image-grid">
+                <div class="image-card">
+                    <div class="image-title">ROC Curve</div>
+                    <img src="roc_curve.png" alt="ROC Curve">
+                </div>
+                
+                <div class="image-card">
+                    <div class="image-title">Confusion Matrix</div>
+                    <img src="confusion_matrix.png" alt="Confusion Matrix">
+                </div>
+                
+                <div class="image-card">
+                    <div class="image-title">Score Distribution</div>
+                    <img src="score_distribution.png" alt="Score Distribution">
+                </div>
+                
+                <div class="image-card">
+                    <div class="image-title">DET Curve</div>
+                    <img src="det_curve.png" alt="DET Curve">
+                </div>
+            </div>
+        </div>
+        
+        <div class="footer">
+            <p><strong>Face Recognition System</strong></p>
+            <p>Model: FaceNet (InceptionResnetV1) pre-trained on VGGFace2</p>
+            <p>Test Samples: 82 | Students: 9 | Generated: March 10, 2026</p>
+        </div>
+    </div>
+</body>
+</html>

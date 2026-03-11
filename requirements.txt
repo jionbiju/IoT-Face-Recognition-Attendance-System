@@ -71,5 +71,8 @@ threadpoolctl==3.2.0
 six==1.16.0
 packaging==23.2
 
+# Excel Export
+openpyxl==3.1.2
+
 # Note: pandas removed (not required for core functionality)
 # Note: matplotlib, seaborn, plotly removed (not used in production)
