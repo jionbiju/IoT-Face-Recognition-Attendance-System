@@ -1451,8 +1451,19 @@ def download_excel():
             except:
                 ws.cell(row=header_row, column=idx, value=date_str)
         
+        # Add Attendance Percentage column
+        percentage_col = len(all_dates) + date_col_start
+        percentage_cell = ws.cell(row=header_row, column=percentage_col, value="Attendance %")
+        percentage_cell.font = Font(bold=True, size=10)
+        percentage_cell.alignment = Alignment(horizontal='center', vertical='center')
+        
+        # Add "Total" in second row for percentage column
+        ws.cell(row=header_row + 1, column=percentage_col, value="Total")
+        ws.cell(row=header_row + 1, column=percentage_col).font = Font(size=8, italic=True)
+        ws.cell(row=header_row + 1, column=percentage_col).alignment = Alignment(horizontal='center')
+        
         # Style header row
-        for col in range(1, len(all_dates) + 3):
+        for col in range(1, len(all_dates) + 4):  # +4 to include percentage column
             cell = ws.cell(row=header_row, column=col)
             cell.font = Font(bold=True, size=10)
             cell.fill = PatternFill(start_color="D3D3D3", end_color="D3D3D3", fill_type="solid")
@@ -1474,6 +1485,10 @@ def download_excel():
             # Student name
             ws.cell(row=row_idx, column=2, value=student_name)
             
+            # Track attendance for percentage calculation
+            present_count = 0
+            total_days = len(all_dates)
+            
             # Attendance for each date
             for col_idx, date_str in enumerate(all_dates, start=date_col_start):
                 cell = ws.cell(row=row_idx, column=col_idx)
@@ -1483,9 +1498,11 @@ def download_excel():
                              date_str in attendance_map[student_id])
                 
                 if is_present:
-                    # Present = blank cell
-                    cell.value = ""
-                    cell.fill = PatternFill(start_color="FFFFFF", end_color="FFFFFF", fill_type="solid")
+                    # Present = 'P'
+                    cell.value = "P"
+                    cell.font = Font(bold=True, color="008000")  # Green color
+                    cell.fill = PatternFill(start_color="E6FFE6", end_color="E6FFE6", fill_type="solid")
+                    present_count += 1
                 else:
                     # Absent = 'A'
                     cell.value = "A"
@@ -1499,6 +1516,34 @@ def download_excel():
                     top=Side(style='thin'),
                     bottom=Side(style='thin')
                 )
+            
+            # Calculate and add attendance percentage
+            percentage_col = len(all_dates) + date_col_start
+            if total_days > 0:
+                attendance_percentage = (present_count / total_days) * 100
+                percentage_cell = ws.cell(row=row_idx, column=percentage_col, value=f"{attendance_percentage:.1f}%")
+                
+                # Color code the percentage
+                if attendance_percentage >= 75:
+                    percentage_cell.font = Font(bold=True, color="008000")  # Green for good attendance
+                    percentage_cell.fill = PatternFill(start_color="E6FFE6", end_color="E6FFE6", fill_type="solid")
+                elif attendance_percentage >= 50:
+                    percentage_cell.font = Font(bold=True, color="FF8C00")  # Orange for average attendance
+                    percentage_cell.fill = PatternFill(start_color="FFF2E6", end_color="FFF2E6", fill_type="solid")
+                else:
+                    percentage_cell.font = Font(bold=True, color="FF0000")  # Red for poor attendance
+                    percentage_cell.fill = PatternFill(start_color="FFE6E6", end_color="FFE6E6", fill_type="solid")
+            else:
+                percentage_cell = ws.cell(row=row_idx, column=percentage_col, value="0.0%")
+                percentage_cell.font = Font(bold=True, color="FF0000")
+            
+            percentage_cell.alignment = Alignment(horizontal='center', vertical='center')
+            percentage_cell.border = Border(
+                left=Side(style='thin'),
+                right=Side(style='thin'),
+                top=Side(style='thin'),
+                bottom=Side(style='thin')
+            )
             
             # Style student info columns
             for col in [1, 2]:
@@ -1518,13 +1563,9 @@ def download_excel():
         for col_idx in range(date_col_start, len(all_dates) + date_col_start):
             ws.column_dimensions[get_column_letter(col_idx)].width = 6
         
-        # --- COLUMN WIDTHS ---
-        ws.column_dimensions['A'].width = 12  # Roll No
-        ws.column_dimensions['B'].width = 25  # Student Name
-        
-        # Date columns - narrower
-        for col_idx in range(date_col_start, len(all_dates) + date_col_start):
-            ws.column_dimensions[get_column_letter(col_idx)].width = 6
+        # Percentage column - wider
+        percentage_col = len(all_dates) + date_col_start
+        ws.column_dimensions[get_column_letter(percentage_col)].width = 12
     
     conn.close()
     
