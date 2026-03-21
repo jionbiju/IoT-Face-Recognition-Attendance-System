@@ -35,11 +35,8 @@
                 <a class="btn btn-info" href="/attendance_audit_log">
                   <i class="fas fa-history me-2"></i>Audit Log
                 </a>
-                <a class="btn btn-success" href="/download_csv?period={{ period }}&subject={{ subject_filter }}&search={{ search_query }}&start_date={{ start_date }}&end_date={{ end_date }}">
-                  <i class="fas fa-file-csv me-2"></i>CSV Report
-                </a>
                 <a class="btn btn-primary" href="/download_excel?start_date={{ start_date }}&end_date={{ end_date }}">
-                  <i class="fas fa-file-excel me-2"></i>Excel (College Format)
+                  <i class="fas fa-file-excel me-2"></i>Download Attendance
                 </a>
                 <a class="btn btn-outline-secondary" href="/">
                   <i class="fas fa-arrow-left me-2"></i>Dashboard
@@ -300,9 +297,12 @@
                       </div>
                     </td>
                     <td class="text-center">
-                      <button class="btn btn-sm btn-danger" onclick="unmarkAttendance({{ r[0] }}, '{{ r[2] }}')">
+                      <button class="btn btn-sm btn-danger unmark-btn" 
+                              data-attendance-id="{{ r[0] }}" 
+                              data-student-name="{{ r[2] }}">
                         <i class="fas fa-times me-1"></i>Unmark
                       </button>
+                    </td>
                     </td>
                   </tr>
                   {% endfor %}
@@ -420,6 +420,16 @@
   <script>
     let currentAttendanceId = null;
     let currentStudentName = null;
+
+    // Use event delegation for unmark buttons
+    document.addEventListener('click', function(e) {
+      if (e.target.closest('.unmark-btn')) {
+        const button = e.target.closest('.unmark-btn');
+        const attendanceId = button.getAttribute('data-attendance-id');
+        const studentName = button.getAttribute('data-student-name');
+        unmarkAttendance(attendanceId, studentName);
+      }
+    });
 
     function filterBySubject() {
       const subjectId = document.getElementById('subjectFilter').value;
